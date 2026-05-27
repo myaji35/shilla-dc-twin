@@ -52,16 +52,17 @@ main{flex:1;display:flex;min-height:0;}
 #floorBtns,#metBtns,#mepBtns{display:flex;flex-direction:column;gap:4px;}
 .floorBtn,.metBtn,.mepBtn{text-align:left;padding:7px 9px;font:600 12px 'Courier New',monospace;color:#bfe0d8;background:#10202c;border:1px solid #1d3543;border-radius:6px;cursor:pointer;transition:.15s;}
 .floorBtn:hover,.metBtn:hover,.mepBtn:hover{background:#163040;border-color:#2ec4b6;color:#dff4ec;}
-.mepBtn[data-s="power"].on{border-color:#EFC94B;color:#ffe9a8;box-shadow:0 0 10px rgba(239,201,75,.3);background:linear-gradient(90deg,#2a4010,#10202c);}
+.mepBtn[data-s="power"].on{border-color:#ff5a4a;color:#ffc8c0;box-shadow:0 0 10px rgba(255,90,74,.35);background:linear-gradient(90deg,#3a1410,#10202c);}
 .mepBtn[data-s="network"].on{border-color:#3aa0ff;color:#cde6ff;box-shadow:0 0 10px rgba(58,160,255,.3);background:linear-gradient(90deg,#0e2a4a,#10202c);}
 .mepBtn[data-s="hvac"].on{border-color:#2ec4b6;color:#bff0e8;box-shadow:0 0 10px rgba(46,196,182,.3);background:linear-gradient(90deg,#0e3a36,#10202c);}
 .mepBtn[data-s="water"].on{border-color:#1ec8d8;color:#bfeef4;box-shadow:0 0 10px rgba(30,200,216,.3);background:linear-gradient(90deg,#0e3640,#10202c);}
 .floorBtn.on{background:linear-gradient(90deg,#1a5a52,#10202c);border-color:#2ec4b6;color:#9FE1CB;box-shadow:0 0 10px rgba(46,196,182,.3);}
 .floorBtn.allBtn{color:#8aa0aa;font-size:11px;}
-.metBtn.on{background:linear-gradient(90deg,#2a4a1a,#10202c);border-color:#EFC94B;color:#ffe9a8;box-shadow:0 0 10px rgba(239,201,75,.25);}
-#metBtns .metBtn[data-m="heat"].on{border-color:#5ad6ff;box-shadow:0 0 10px rgba(90,214,255,.3);color:#cdeeff;}
-#metBtns .metBtn[data-m="cool"].on{border-color:#2ec4b6;box-shadow:0 0 10px rgba(46,196,182,.3);color:#bff0e8;}
-#metBtns .metBtn[data-m="occ"].on{border-color:#9FE1CB;color:#dff4ec;}
+.metBtn.on{background:linear-gradient(90deg,#2a3a1a,#10202c);color:#dff4ec;}
+#metBtns .metBtn[data-m="heat"].on{border-color:#ff9a3a;box-shadow:0 0 10px rgba(255,154,58,.35);color:#ffd9a8;background:linear-gradient(90deg,#3a2410,#10202c);}
+#metBtns .metBtn[data-m="power"].on{border-color:#ff5a4a;box-shadow:0 0 10px rgba(255,90,74,.35);color:#ffc8c0;background:linear-gradient(90deg,#3a1410,#10202c);}
+#metBtns .metBtn[data-m="cool"].on{border-color:#3aa0ff;box-shadow:0 0 10px rgba(58,160,255,.35);color:#cde6ff;background:linear-gradient(90deg,#0e2a4a,#10202c);}
+#metBtns .metBtn[data-m="occ"].on{border-color:#9FE1CB;color:#dff4ec;background:linear-gradient(90deg,#1a3a30,#10202c);}
 #issueList{display:flex;flex-direction:column;gap:5px;}
 .iss{padding:6px 8px;border-radius:6px;font:500 11px 'Courier New',monospace;border-left:3px solid #5a6a7a;background:#0f1c26;color:#cdd9e0;}
 .iss.rd{border-left-color:#E24B4A;background:#1e1012;color:#ffd0cc;}
@@ -239,6 +240,43 @@ function buildRack(roomKey,idx,active){
 function buildRoomRacks(roomKey){const n=roomKey==="A"?12:8;const r=[];for(let i=1;i<=n;i++)r.push(buildRack(roomKey,i,roomKey==="A"?true:i<=3));return r;}
 const RACKS={A:buildRoomRacks("A"),B:buildRoomRacks("B")};
 
+/* ===================== 운영 데이터 레이어: 자산 + 실시간 센서 + 알람 ===================== */
+const VENDORS=["Dell PowerEdge","HPE ProLiant","Lenovo ThinkSystem","Supermicro"];
+// 각 랙에 자산 메타 + 센서 히스토리(스파크라인용) 부여
+[...RACKS.A,...RACKS.B].forEach((rk,i)=>{
+  rk.asset={id:rk.id, model:VENDORS[i%VENDORS.length]+" R"+(760+i*10), vendor:VENDORS[i%VENDORS.length].split(" ")[0],
+    install:"2025-0"+(1+i%9)+"-15", warranty:"2028-12-31", sn:"SN"+(rk.room==="A"?"A":"B")+String(1000+i)};
+  rk.hist={temp:[],load:[],pwr:[]};        // 최근 N개 센서 추세
+  rk.alarm=null;                            // 현재 알람 상태
+});
+// 임계치 규칙
+const THRESH={temp:{warn:40,crit:46}, load:{warn:80,crit:90}};
+let alarmHistory=[];                        // 발생 알람 이력
+function pushHist(arr,v,max){arr.push(v);if(arr.length>max)arr.shift();}
+// 센서 틱: 랙 온도/부하/전력에 추세+노이즈, 임계 평가
+function tickSensors(){
+  let anyAlarm=false;
+  [...RACKS.A,...RACKS.B].forEach(rk=>{
+    if(!rk.active && rk.load<5){pushHist(rk.hist.temp,rk.maxTemp,40);pushHist(rk.hist.load,rk.load,40);return;}
+    // 온도: 부하 추종 + 노이즈 (±0.8)
+    const tTarget=22+rk.load*0.32+(rk.gpus>0?6:0);
+    rk.maxTemp=Math.round((rk.maxTemp*0.7+tTarget*0.3+(Math.random()*1.6-0.8))*10)/10;
+    rk.load=Math.max(8,Math.min(99,Math.round(rk.load+(Math.random()*6-3))));
+    pushHist(rk.hist.temp,rk.maxTemp,40);pushHist(rk.hist.load,rk.load,40);pushHist(rk.hist.pwr,rk.pwr,40);
+    // 임계 평가
+    const prev=rk.alarm;
+    rk.alarm = rk.maxTemp>=THRESH.temp.crit||rk.load>=THRESH.load.crit ? "crit"
+             : rk.maxTemp>=THRESH.temp.warn||rk.load>=THRESH.load.warn ? "warn" : null;
+    if(rk.alarm && rk.alarm!==prev){
+      alarmHistory.unshift({t:Date.now(),id:rk.id,sev:rk.alarm,
+        msg:`${rk.id} ${rk.maxTemp>=THRESH.temp.warn?rk.maxTemp+"°C":rk.load+"% 부하"}`});
+      if(alarmHistory.length>12)alarmHistory.pop();
+    }
+    if(rk.alarm)anyAlarm=true;
+  });
+  return anyAlarm;
+}
+
 /* ===================== 평면도 데이터 (CAD: 그리드축 기반 mm→도면단위) =====================
    도면 좌표계: 1 unit = 50mm. 건물 외벽 내부 22m × 16m 가정.
    origin (도면 좌상단 벽 안쪽) = (140, 120). 축간격 X=110, Y=120 (=5.5m, 6m)
@@ -249,6 +287,74 @@ const AXY=[0,150,330,500];        // Y 그리드축 누적 — Y1..Y4
 function gx(i){return OX+AXX[i];}
 function gy(i){return OY+AXY[i];}
 const BW=AXX[AXX.length-1], BH=AXY[AXY.length-1]; // 건물 내부 폭/높이(px)
+
+/* ===================== 단일 공간정의 SSOT (2D/3D 공통 좌표) =====================
+   대지 4,250㎡ · 건폐율 45% → 건축면적 ≈1,924㎡ · 건물 내부 52m(X) × 37m(Z).
+   층고 4.5m, 외벽 400mm 단열, 기둥 600×600 그리드, 창문 최소(서버실 무창).
+   그리드축 m 단위. 2D SVG와 3D TWIN이 동일 좌표 공유 → 건축 정합 보장. */
+const BLD={W:52, D:37, FH_M:4.5, WALL:0.4, COL:0.6, COLSPAN:6.5};   // 실측 제원(m)
+const GRID={
+  X:[0,6.5,13,19.5,26,32.5,39,45.5,52],   // 8스팬 × 6.5m = 52m
+  Z:[0,7.4,14.8,22.2,29.6,37],             // 5밴드 × 7.4m = 37m
+};
+// 수직 코어(전 층 동일 위치 관통): 우측 코어존(계단A+화물EV+WC+PS) + 좌측 비상계단B (피난 2개소)
+// 코어/WC/PS/EV는 모든 층 동일 좌표 — 건축 규범(수직 관통) 충족
+const COREZONE=[
+  {id:"coreMain",name:"코어 A (직통계단·화물EV)",tag:"CORE-A",cat:"코어/CORE",x:45.5,z:14.8,w:6.5,d:7.4,core:1,stair:1,ev:1,desc:"직통계단 + 화물 엘리베이터. 전 층 수직 관통."},
+  {id:"wcCore",name:"화장실·다용도실",tag:"WC/UTIL",cat:"코어/CORE",x:45.5,z:22.2,w:6.5,d:7.4,core:1,wc:1,desc:"남/녀/장애인 위생 + 다용도실(청소·창고). PS 인접 수직 정렬."},
+  {id:"psCore",name:"전기·기계 PS",tag:"PS",cat:"코어/CORE",x:45.5,z:7.4,w:6.5,d:7.4,core:1,ps:1,desc:"전력·통신·배관 수직 샤프트. 전 층 관통."},
+  {id:"stairB",name:"비상계단 B",tag:"STAIR-B",cat:"코어/CORE",x:0,z:14.8,w:6.5,d:7.4,core:1,stair:1,desc:"피난 2방향 확보용 직통계단. 전 층 관통."},
+];
+const COR_M=2.4;                              // 복도 폭 2.4m (장비 이동 + 피난)
+// 2D px / 3D 유닛 변환 (1m → px / unit)
+const M2PX=12.3, M2U=4.2;                      // 2D: 52m≈640px, 3D: 52m≈218u
+const oxp=OX, ozp=OY;
+function mpx(m){return oxp+m*M2PX;}            // X m → 2D px
+function mpz(m){return ozp+m*M2PX;}            // Z m → 2D px(평면 y축)
+function tux(m){return m*M2U;}                 // X m → 3D 유닛
+function tuz(m){return m*M2U;}                 // Z m → 3D 유닛
+/* 공간 모델: 실은 그리드 m 좌표(x,z=좌상단, w,d=크기). 2D/3D 공통.
+   복도(중앙 East-West)는 코어↔서버실 연결, 전 층 동일. 서버실은 면적 가중 大. */
+const SPACE={
+  "0":{title:"B1 PLAN — 전력 / 냉각 인프라",rooms:[
+    // 전력존(상단 밴드 Z0~Z1)
+    {id:"recv",name:"수전·변전실",tag:"MAIN-PWR",cat:"전력/POWER",x:0,z:0,w:13,d:7.4,area:"96㎡",equip:"trafo",desc:"한전 22.9kV 인입→저압 변환. 계통연계 확약이 선결."},
+    {id:"ups",name:"UPS·배터리실",tag:"UPS",cat:"전력/POWER",x:13,z:0,w:13,d:7.4,area:"96㎡",equip:"ups",desc:"무정전 15분 N+1. GPU 순단 방지 필수."},
+    {id:"gen",name:"비상발전기실",tag:"GEN",cat:"전력/POWER",x:26,z:0,w:13,d:7.4,area:"96㎡",equip:"gen",desc:"1.25MVA 디젤 N+1. 자동기동 10초."},
+    {id:"elecB",name:"전기실(배전반)",tag:"ELEC",cat:"전력/POWER",x:39,z:0,w:6.5,d:7.4,area:"48㎡",equip:"ups",desc:"저압 배전반·분전반 집약."},
+    // 냉각존(중·하단 밴드 Z1~Z4, 코어 제외)
+    {id:"pump",name:"냉각수 펌프·축열조",tag:"CW-PUMP",cat:"냉각/COOL",x:0,z:7.4,w:39,d:7.4,area:"289㎡",equip:"chiller",desc:"옥상 냉각타워↔서버실 CDU 순환(7℃/14℃). 펌프 N+1 + 축열조."},
+    {id:"fire",name:"소화설비실",tag:"FIRE",cat:"공용/UTIL",x:0,z:22.2,w:13,d:7.4,area:"96㎡",desc:"청정약제(가스계) 소화 — 장비 무손상 진압."},
+    {id:"tank",name:"저수·소화수조",tag:"WATER",cat:"공용/UTIL",x:13,z:22.2,w:13,d:7.4,area:"96㎡",desc:"소화용수·냉각보충수 저장."},
+  ]},
+  "1":{title:"1F PLAN — 로비 / 관제 / 서버실 A",rooms:[
+    {id:"lobby",name:"로비·리셉션",tag:"LOBBY",cat:"관제/OPS",x:0,z:0,w:13,d:7.4,area:"96㎡",furn:"lobby",desc:"맨트랩(2중문)·생체인증 출입통제. 방문자 안내."},
+    {id:"noc",name:"NOC 통합관제실 ★",tag:"NOC",cat:"관제/OPS",x:13,z:0,w:13,d:7.4,area:"96㎡",furn:"noc",desc:"사업의 심장. 디지털트윈 1인 통합관제."},
+    {id:"office1",name:"운영 사무실",tag:"OFFICE",cat:"관제/OPS",x:26,z:0,w:13,d:7.4,area:"96㎡",furn:"desk",desc:"기획·백엔드·운영 정예팀."},
+    {id:"mdf",name:"통신실 MDF",tag:"MDF",cat:"서버/IT",x:39,z:0,w:6.5,d:7.4,area:"48㎡",desc:"외부 회선 집선. 이중화 10Gbps 멀티캐리어."},
+    // 서버실 A — 주력, 면적 압도적 (코어/복도 제외 전 영역)
+    {id:"srvA",name:"서버실 A (GPU 주력)",tag:"SERVER-A",cat:"서버/IT",x:0,z:7.4,w:39,d:14.8,area:"577㎡",rackRoom:"A",desc:"512 GPU 주력 클러스터. 핫/콜드 아일 차폐 + 액냉 CDU. ▶ 클릭=랙 도열."},
+    {id:"crac1",name:"공조실 A (인버터)",tag:"CRAC-A",cat:"냉각/COOL",x:0,z:22.2,w:13,d:7.4,area:"96㎡",equip:"crac",desc:"인버터 CRAC N+1. AI 부하예측 RPM 선제조정."},
+    {id:"store1",name:"장비 반입·창고",tag:"STORE",cat:"공용/UTIL",x:13,z:22.2,w:13,d:7.4,area:"96㎡",desc:"서버 반입검수·예비부품 보관."},
+  ]},
+  "2":{title:"2F PLAN — 서버실 B(증설) / 데모 / 사무",rooms:[
+    {id:"srvB",name:"서버실 B (증설)",tag:"SERVER-B",cat:"서버/IT",x:0,z:0,w:39,d:14.8,area:"577㎡",rackRoom:"B",desc:"2단계 증설 H200/B200. 1,000장대 확장 대비. ▶ 클릭=랙 도열."},
+    {id:"crac2",name:"공조실 B (인버터)",tag:"CRAC-B",cat:"냉각/COOL",x:39,z:0,w:6.5,d:14.8,area:"96㎡",equip:"crac",desc:"서버실 B 전용 인버터 항온항습. 단계 가동."},
+    {id:"demo",name:"고객 데모실",tag:"DEMO",cat:"관제/OPS",x:0,z:14.8,w:16,d:7.4,area:"118㎡",furn:"demo",desc:"디지털트윈 관제 시연 쇼룸. GPU 임대 영업 핵심 접점."},
+    {id:"meeting",name:"회의실",tag:"MEETING",cat:"관제/OPS",x:16,z:14.8,w:11.5,d:7.4,area:"85㎡",furn:"meeting",desc:"고객·내부 회의. 화상회의 설비."},
+    {id:"office2",name:"사무실",tag:"OFFICE",cat:"관제/OPS",x:27.5,z:14.8,w:11.5,d:7.4,area:"85㎡",furn:"desk",desc:"2층 운영·연구 업무공간."},
+    {id:"lounge",name:"휴게실",tag:"LOUNGE",cat:"관제/OPS",x:0,z:22.2,w:13,d:7.4,area:"96㎡",furn:"meeting",desc:"직원 휴게·탕비."},
+  ]},
+  "roof":{title:"옥상 PLAN — 냉각 / 태양광",rooms:[
+    {id:"cool",name:"인버터 냉각존",tag:"INV-COOL",cat:"냉각/COOL",x:0,z:0,w:19.5,d:37,area:"722㎡",desc:"인버터 가변속 냉각타워 + VRF 실외기 뱅크."},
+    {id:"solar",name:"태양광 어레이",tag:"SOLAR",cat:"전력/POWER",x:19.5,z:0,w:32.5,d:37,area:"1203㎡",desc:"대면적 재생에너지 어레이. 인버터 PCS 계통연계."},
+  ]},
+};
+/* 외부 별동 시설 — 주 건물과 이격(화재·안전 규범). 대지 좌표(주건물 우측 옆) */
+const ESS={ id:"ess",name:"ESS 별동 (에너지저장)",tag:"ESS",cat:"전력/POWER",
+  // 주 건물 우측에 이격거리 두고 단층 별동 (실측 m)
+  offX:62, offZ:4, w:18, d:14, h:5,
+  area:"252㎡", desc:"리튬인산철(LFP) ESS 컨테이너 뱅크. 피크저감·정전대비·태양광 연계 저장. 주건물과 이격(배터리 화재 안전)·전용 소화·열폭주 격벽." };
 
 /* 각 층 실(室): x,y,w,h 는 도면 절대 px. rooms는 격자 안에 배치 */
 const FLOORS={
@@ -631,14 +737,30 @@ function enterRackRow(roomKey){
     `<span class="pill ok">● COLD/HOT AISLE 분리</span>`;
 }
 function showRoomBack(roomKey){const r=FLOORS[curFloor].rooms.find(x=>x.rackRoom===roomKey);if(r)showInfo(r);}
+function spark(arr,color,w,h){ // 추세 스파크라인 SVG
+  if(!arr||arr.length<2)return "";
+  const mn=Math.min(...arr),mx=Math.max(...arr),rng=mx-mn||1;
+  const pts=arr.map((v,i)=>`${(i/(arr.length-1)*w).toFixed(1)},${(h-(v-mn)/rng*h).toFixed(1)}`).join(" ");
+  return `<svg width="${w}" height="${h}" style="display:block"><polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.5"/></svg>`;
+}
 function showRack(rk){
   document.getElementById('aTitle').textContent=rk.id;
-  document.getElementById('aCat').textContent=`▌ 서버실 ${rk.room} · ${rk.active?"가동 중":"증설/대기"}`;
-  let h=`<div class="kv"><span class="k">서버(노드)</span><span class="v">${rk.servers}</span></div>`+
+  const al=rk.alarm;
+  document.getElementById('aCat').textContent=`▌ 서버실 ${rk.room} · ${al==="crit"?"⚠ 위험":al==="warn"?"⚠ 경고":rk.active?"가동 중":"증설/대기"}`;
+  const a=rk.asset;
+  let h=`<div class="assetbox"><div class="ar"><span>자산ID</span><b>${a.id}</b></div>`+
+    `<div class="ar"><span>모델</span>${a.model}</div>`+
+    `<div class="ar"><span>S/N</span>${a.sn}</div>`+
+    `<div class="ar"><span>설치/보증</span>${a.install} / ${a.warranty}</div></div>`+
+    (al?`<div class="albadge ${al}">${al==="crit"?"● 임계 초과 — 즉시 조치 필요":"● 경고 — 모니터링 강화"}</div>`:`<div class="albadge ok">● 정상 운전</div>`)+
+    `<div class="kv"><span class="k">서버(노드)</span><span class="v">${rk.servers}</span></div>`+
     `<div class="kv"><span class="k">GPU 탑재</span><span class="v">${rk.gpus}장</span></div>`+
     `<div class="kv"><span class="k">랙 전력</span><span class="v">${rk.pwr}kW</span></div>`+
     `<div class="kv"><span class="k">최고온도</span><span class="v" style="color:${rk.maxTemp>=46?'#E24B4A':rk.maxTemp>=40?'#EF9F27':'#5DCAA5'}">${rk.maxTemp}°C</span></div>`+
+    `<div class="mini"><div class="lab">▌ 온도 추세 (실시간)</div>${spark(rk.hist.temp,'#5ad6ff',270,34)}</div>`+
+    `<div class="mini"><div class="lab">▌ 부하 추세 (실시간)</div>${spark(rk.hist.load,'#EFC94B',270,34)}</div>`+
     `<div class="mini"><div class="lab">▌ 랙 부하</div><div class="bar"><i style="width:${rk.load}%;background:${rk.load>80?'linear-gradient(90deg,#EF9F27,#E24B4A)':'linear-gradient(90deg,#5DCAA5,#9FE1CB)'}"></i></div></div>`+
+    `<button class="wobtn" id="woBtn">🔧 작업지시 발행 (WO)</button>`+
     `<div class="mini"><div class="lab">▌ 인서트 HW (U 슬롯별)</div>`;
   rk.slots.forEach(s=>{if(!s.occupied){h+=`<div class="hwslot empty">U — · 빈 슬롯</div>`;return;}
     const tc=s.temp>=46?'#E24B4A':s.temp>=40?'#EF9F27':'#9FE1CB';
@@ -649,6 +771,8 @@ function showRack(rk){
   h+=`</div><div class="backbtn" id="rackBack">← 랙 ELEVATION으로</div>`;
   document.getElementById('aBody').innerHTML=h;
   document.getElementById('rackBack').onclick=()=>enterRackRow(rk.room);
+  const wo=document.getElementById('woBtn');if(wo)wo.onclick=()=>{
+    wo.textContent="✓ WO-"+Date.now().toString().slice(-5)+" 발행됨 → 담당자 배정";wo.classList.add('done');};
 }
 function showInfo(r){
   document.getElementById('aTitle').textContent=r.name;
@@ -1073,7 +1197,7 @@ let coolPipeGroup=null;
 function buildCoolingLoop(FH){
   // 배관 자체는 항상 표시(실설비 라인), dot 흐름은 냉각수 토글 시
   const g=new TJS.Group();g.userData={dyn:1};scene.add(g);coolPipeGroup=g;
-  const IN=0x1ec8ff, OUT=0xe2564a;       // 공급(청)·환수(적)
+  const IN=0x2aa0ff, OUT=0x6ad8ff;       // 냉각수=푸른색 계열 (공급 진청·환수 밝은청) — 대표님 요청: 냉각수 푸른색
   // 주요 노드(월드 좌표): 옥상 냉각타워(40,FH*2+9,45) / B1 축열조·펌프(40,-FH+17,140) / 각 층 CRAC 헤더
   const tower=[40,FH*2+9,45], tank=[40,-FH+17,140];
   const cracHeader={B1:[150,-FH+20,120],"1F":[180,18,80],"2F":[180,FH+18,55]};  // 층별 냉방 분기 헤더
@@ -1092,8 +1216,8 @@ function buildCoolingLoop(FH){
   const outMain=ortho([[88,-FH+17,140],[72,-FH+17,45],[72,FH*2+9,45],tower]);
   runBus(g,OUT,1.4,outMain);
   // IN/OUT 라벨
-  const li=lab("냉수 공급 IN 7℃","#9fe6ff");li.position.set(40,FH+40,45);li.scale.set(40,10,1);li.userData={dyn:1};g.add(li);
-  const lo=lab("냉수 환수 OUT 14℃","#ffb0a8");lo.position.set(95,FH+40,90);lo.scale.set(42,10,1);lo.userData={dyn:1};g.add(lo);
+  const li=lab("냉수 공급 IN 7℃","#5ab8ff");li.position.set(40,FH+40,45);li.scale.set(40,10,1);li.userData={dyn:1};g.add(li);
+  const lo=lab("냉수 환수 OUT 14℃","#9fdcff");lo.position.set(95,FH+40,90);lo.scale.set(42,10,1);lo.userData={dyn:1};g.add(lo);
   // 흐름 dot — 배관과 동일한 직각 경로
   const inFull=inMain.concat(inRiser.slice(1));
   const f1=makeFlow(inFull,IN,12,0.0040,1.5);f1.userData={dyn:1,metric:"cool"};scene.add(f1);
@@ -1105,7 +1229,7 @@ let powerLineGroup=null;
 /* 전력 실배선 계통 — 수전→변압기→UPS→PDU→랙 부스바, 전압단계별 색 + 흐름 dot */
 function buildPowerLoop(FH){
   const g=new TJS.Group();g.userData={dyn:1};scene.add(g);powerLineGroup=g;
-  const HV=0xff8a3a, LV=0xEFC94B, BR=0x9fe06a;   // 고압(주황)·저압(노랑)·분전(연두)
+  const HV=0xff3030, LV=0xff5a4a, BR=0xff8a6a;   // 전력=붉은색 계열 (고압 진적·저압 적·분전 주적) — 대표님 요청: 전력 붉은색
   // 노드: 수전반(외부 175,-FH,40) / 변압기(150,-FH,40) / UPS뱅크(20~86,-FH,40) / 층 PDU 헤더
   const incoming=[175,-FH+22,40], trafo=[150,-FH+22,40], upsBank=[55,-FH+24,40];
   const pduHeader={B1:[120,-FH+22,75],"1F":[40,20,60],"2F":[40,FH+20,55]};   // 층별 분전 헤더
@@ -1124,8 +1248,8 @@ function buildPowerLoop(FH){
   runBus(g,BR,1.0,[[40,20,60],[95,20,60],[95,20,90],[40,20,90]]);     // 1F 부스바(이미 직각)
   runBus(g,BR,1.0,[[40,FH+20,55],[95,FH+20,55],[95,FH+20,85],[40,FH+20,85]]); // 2F 부스바
   // 라벨
-  const lh=lab("수전 22.9kV","#ffc89a");lh.position.set(175,-FH+34,40);lh.scale.set(34,9,1);lh.userData={dyn:1};g.add(lh);
-  const lb2=lab("UPS 분전 LV","#fff0b0");lb2.position.set(55,-FH+38,40);lb2.scale.set(34,9,1);lb2.userData={dyn:1};g.add(lb2);
+  const lh=lab("수전 22.9kV","#ff7a6a");lh.position.set(175,-FH+34,40);lh.scale.set(34,9,1);lh.userData={dyn:1};g.add(lh);
+  const lb2=lab("UPS 분전 LV","#ff9a8a");lb2.position.set(55,-FH+38,40);lb2.scale.set(34,9,1);lb2.userData={dyn:1};g.add(lb2);
   // 흐름 dot — 수전→랙 정방향, 배관과 동일한 직각 경로
   const full=ortho([incoming,trafo,upsBank,[48,-FH+24,40],[48,20,40],[48,20,60],[40,20,60],[95,20,60],[95,20,90]]);
   const pf=makeFlow(full,LV,12,0.0050,1.4);pf.userData={dyn:1,metric:"power"};scene.add(pf);
@@ -1163,12 +1287,12 @@ function buildMEP(FH){
   // 좌표는 build3D 설비 위치와 정합 (월드 좌표)
   // ── 전기 계통(노랑): 수전→변압기→UPS→PDU→랙 부스바 ──
   const ep=new TJS.Group();ep.userData={dyn:1,mep:"power"};ep.visible=false;
-  node3(ep,0xEFC94B,150,-FH+24,40,3); // 변압기
-  runBus(ep,0xEFC94B,1.1,[[150,-FH+24,40],[55,-FH+24,40]]);          // 변압기→UPS뱅크
-  [20,42,64,86].forEach(x=>node3(ep,0xEFC94B,x,-FH+26,40,2));         // UPS 4
-  runBus(ep,0xEFC94B,.9,[[55,-FH+26,40],[55,-FH+26,90],[55,-2,90],[55,18,80]]); // B1→1F 수직 라이저
-  runBus(ep,0xEFC94B,1.0,[[40,20,60],[95,20,60],[95,20,90],[40,20,90]]); // 1F 서버랙 상부 부스바 루프
-  [40,55,70,85].forEach(x=>node3(ep,0xEFC94B,x,20,75,1.4));            // PDU 노드
+  node3(ep,0xff5a4a,150,-FH+24,40,3); // 변압기
+  runBus(ep,0xff5a4a,1.1,[[150,-FH+24,40],[55,-FH+24,40]]);          // 변압기→UPS뱅크
+  [20,42,64,86].forEach(x=>node3(ep,0xff5a4a,x,-FH+26,40,2));         // UPS 4
+  runBus(ep,0xff5a4a,.9,[[55,-FH+26,40],[55,-FH+26,90],[55,-2,90],[55,18,80]]); // B1→1F 수직 라이저
+  runBus(ep,0xff5a4a,1.0,[[40,20,60],[95,20,60],[95,20,90],[40,20,90]]); // 1F 서버랙 상부 부스바 루프
+  [40,55,70,85].forEach(x=>node3(ep,0xff5a4a,x,20,75,1.4));            // PDU 노드
   scene.add(ep);mepGroups.power=ep;
   // ── 네트워크(청색): 코어스위치→ToR(랙상단)→오버헤드 케이블 트레이 ──
   const nt=new TJS.Group();nt.userData={dyn:1,mep:"network"};nt.visible=false;
@@ -1231,9 +1355,9 @@ function updateMetricHUD(){
   const sumP=racks.reduce((a,r)=>a+r.pwr,0).toFixed(1);
   const avgL=Math.round(racks.reduce((a,r)=>a+r.load,0)/racks.length);
   const rows=[];
-  if(metricOn.heat)rows.push(`<span style="color:#5ad6ff">열</span> 평균 ${avgT}°C`);
-  if(metricOn.power)rows.push(`<span style="color:#EFC94B">전력</span> ${sumP}kW`);
-  if(metricOn.cool)rows.push(`<span style="color:#2ec4b6">냉각수</span> 7℃/14℃ 순환`);
+  if(metricOn.heat)rows.push(`<span style="color:#ff9a3a">열</span> 평균 ${avgT}°C`);
+  if(metricOn.power)rows.push(`<span style="color:#ff5a4a">⚡전력</span> ${sumP}kW`);
+  if(metricOn.cool)rows.push(`<span style="color:#3aa0ff">💧냉각수</span> 7℃/14℃ 순환`);
   if(metricOn.occ)rows.push(`<span style="color:#9FE1CB">점유율</span> ${avgL}%`);
   hud.innerHTML="▌ 실시간 계측 "+(activeFloor?`(${activeFloor})`:"(전체)")+"<br>"+rows.join(" · ");
 }
