@@ -356,6 +356,21 @@ const ESS={ id:"ess",name:"ESS 별동 (에너지저장)",tag:"ESS",cat:"전력/P
   offX:62, offZ:4, w:18, d:14, h:5,
   area:"252㎡", desc:"리튬인산철(LFP) ESS 컨테이너 뱅크. 피크저감·정전대비·태양광 연계 저장. 주건물과 이격(배터리 화재 안전)·전용 소화·열폭주 격벽." };
 
+/* cat 문자열 → 색맵 C 키 */
+const CATKEY={"전력/POWER":"pwr","냉각/COOL":"cool","서버/IT":"srv","관제/OPS":"ops","공용/UTIL":"util","코어/CORE":"core"};
+function catColor(cat){return C[CATKEY[cat]||"util"];}
+/* SPACE(m) → 기존 renderPlan이 기대하는 px 실(室) 객체로 변환 (2D/3D 단일 소스) */
+function spaceRoomsPx(floorKey){
+  const rooms=(SPACE[floorKey]?SPACE[floorKey].rooms:[]).concat(COREZONE);
+  return rooms.map(r=>({
+    ...r, c:catColor(r.cat),
+    x:mpx(r.x), y:mpz(r.z), w:r.w*M2PX, h:r.d*M2PX,
+    furn:r.furn, rackRoom:r.rackRoom, core:r.core, wc:r.wc, stair:r.stair, ev:r.ev,
+    door:r.door||(r.cat&&r.cat.indexOf("코어")<0?{side:"S",at:.5}:null),
+    kv:r.kv||{}, st:r.st||"ok"
+  }));
+}
+
 /* 각 층 실(室): x,y,w,h 는 도면 절대 px. rooms는 격자 안에 배치 */
 const FLOORS={
  "1":{title:"1F PLAN — 로비 / 통합관제 / 서버실 A",rooms:[
@@ -415,7 +430,9 @@ let curTab="plan",curFloor="1",subView=null,view="2d";
 function clearCAD(){CAD.innerHTML="";}
 function renderPlan(floor){
   curTab="plan";curFloor=floor;subView=null;clearCAD();
-  const data=FLOORS[floor];
+  // SPACE 단일 소스 기반 (2D/3D 동일 좌표). 건물 52×37m.
+  const data={title:(SPACE[floor]?SPACE[floor].title:"PLAN"), rooms:spaceRoomsPx(floor)};
+  const BW2=BLD.W*M2PX, BH2=BLD.D*M2PX;          // 건물 내부 px (52×37m)
   // 벽 해치 패턴(콘크리트 단면) defs
   const defs=E('defs',{});
   const wp=E('pattern',{id:"wallhatch",width:6,height:6,patternUnits:"userSpaceOnUse",patternTransform:"rotate(45)"});
@@ -426,27 +443,28 @@ function renderPlan(floor){
   CAD.appendChild(E('text',{x:OX,y:40,class:"titletxt"},data.title));
   CAD.appendChild(E('text',{x:OX,y:56,class:"subtxt"},"SCALE 1:200  ·  실(室) 클릭 = 정보  ·  서버실 클릭 = 랙 드릴다운"));
   drawCompass(900,70); drawScaleBar(770,640);
-  // 그리드 축선 (X)
-  for(let i=1;i<AXX.length;i++){const x=gx(i);
-    CAD.appendChild(E('line',{x1:x,y1:OY-40,x2:x,y2:OY+BH+20,class:"grid-ax"}));
+  // 그리드 축선 (X) — GRID.X (m) 기준
+  GRID.X.forEach((m,i)=>{const x=mpx(m);
+    CAD.appendChild(E('line',{x1:x,y1:OY-40,x2:x,y2:OY+BH2+20,class:"grid-ax"}));
     CAD.appendChild(E('circle',{cx:x,cy:OY-46,r:9,class:"axcirc"}));
-    CAD.appendChild(E('text',{x:x,y:OY-43,class:"axtxt","text-anchor":"middle"},"X"+i));}
-  for(let j=1;j<AXY.length;j++){const y=gy(j);
-    CAD.appendChild(E('line',{x1:OX-40,y1:y,x2:OX+BW+20,y2:y,class:"grid-ax"}));
+    CAD.appendChild(E('text',{x:x,y:OY-43,class:"axtxt","text-anchor":"middle"},"X"+i));});
+  GRID.Z.forEach((m,j)=>{const y=mpz(m);
+    CAD.appendChild(E('line',{x1:OX-40,y1:y,x2:OX+BW2+20,y2:y,class:"grid-ax"}));
     CAD.appendChild(E('circle',{cx:OX-46,cy:y,r:9,class:"axcirc"}));
-    CAD.appendChild(E('text',{x:OX-46,y:y+3,class:"axtxt","text-anchor":"middle"},"Y"+j));}
-  CAD.appendChild(E('circle',{cx:OX,cy:OY-46,r:9,class:"axcirc"}));CAD.appendChild(E('text',{x:OX,y:OY-43,class:"axtxt","text-anchor":"middle"},"X0"));
-  CAD.appendChild(E('circle',{cx:OX-46,cy:OY,r:9,class:"axcirc"}));CAD.appendChild(E('text',{x:OX-46,y:OY+3,class:"axtxt","text-anchor":"middle"},"Y0"));
-  // 외벽 (두께 채움: 외곽-내곽 사이 해치) — 건축 도면 벽 표현
-  const WT=9; // 외벽 두께(px ≈ 450mm)
+    CAD.appendChild(E('text',{x:OX-46,y:y+3,class:"axtxt","text-anchor":"middle"},"Y"+j));});
+  // 외벽 (두께 채움: 단열 400mm) — 건축 도면 벽 표현
+  const WT=Math.round(BLD.WALL*M2PX); // 외벽 두께 px (400mm 단열)
   CAD.appendChild(E('path',{
-    d:`M${OX-WT} ${OY-WT} H${OX+BW+WT} V${OY+BH+WT} H${OX-WT} Z `+
-      `M${OX} ${OY} V${OY+BH} H${OX+BW} V${OY} Z`,
+    d:`M${OX-WT} ${OY-WT} H${OX+BW2+WT} V${OY+BH2+WT} H${OX-WT} Z `+
+      `M${OX} ${OY} V${OY+BH2} H${OX+BW2} V${OY} Z`,
     "fill-rule":"evenodd",fill:"url(#wallhatch)",stroke:"var(--cad-wall)","stroke-width":1.4}));
-  CAD.appendChild(E('rect',{x:OX-WT,y:OY-WT,width:BW+2*WT,height:BH+2*WT,fill:"none",stroke:"var(--cad-wall)","stroke-width":1.4}));
-  CAD.appendChild(E('rect',{x:OX,y:OY,width:BW,height:BH,fill:"none",stroke:"var(--cad-wall)","stroke-width":1.2}));
-  // 외벽 창문 (개구부): 남측·동측 일부에 창 — 사무/로비 영역
-  drawWindows(floor,WT);
+  CAD.appendChild(E('rect',{x:OX-WT,y:OY-WT,width:BW2+2*WT,height:BH2+2*WT,fill:"none",stroke:"var(--cad-wall)","stroke-width":1.4}));
+  CAD.appendChild(E('rect',{x:OX,y:OY,width:BW2,height:BH2,fill:"none",stroke:"var(--cad-wall)","stroke-width":1.2}));
+  // 골조 기둥 (600×600 그리드 교점) — 건축 구조
+  GRID.X.forEach(mx2=>GRID.Z.forEach(mz2=>{const px=mpx(mx2),pz=mpz(mz2),cs=Math.round(BLD.COL*M2PX);
+    CAD.appendChild(E('rect',{x:px-cs/2,y:pz-cs/2,width:cs,height:cs,fill:"rgba(207,230,221,.14)",stroke:"var(--cad-wall)","stroke-width":.6}));}));
+  // 외벽 창문 (DC 기능: 사무/로비만 최소 개구, 서버실 무창)
+  drawWindowsSpace(floor,WT,BW2,BH2);
   // 실(室)
   data.rooms.forEach(r=>{
     const g=E('g',{class:"zone"});
@@ -593,6 +611,19 @@ function drawWindows(floor,WT){
   // 동측(우단) 창: 1F 사무, 2F 데모
   const winE=(floor==="1")?[[OY+15,gy(1)-15]]:(floor==="2")?[[gy(1)+15,gy(2)-15]]:[];
   winE.forEach(([y1,y2])=>drawWin(y1,y2,OX+BW,"v",WT));
+}
+// SPACE 기반 창문 (DC 기능: 사무/로비/데모/회의/휴게만 외벽창, 서버·전력·냉각실 무창)
+function drawWindowsSpace(floor,WT,BW2,BH2){
+  const WINCAT={"관제/OPS":1};   // 사무·로비·데모·회의·휴게 등 인적 공간만
+  const rooms=(SPACE[floor]?SPACE[floor].rooms:[]);
+  rooms.forEach(r=>{
+    if(!WINCAT[r.cat])return;
+    // 실이 외벽(상단 z=0 또는 좌측 x=0)에 접하면 그 변에 창
+    if(r.z<=0.1){ const x1=mpx(r.x)+10, x2=mpx(r.x+r.w)-10; if(x2>x1)drawWin(x1,x2,OY,"h",WT); }
+    if(r.x<=0.1){ const y1=mpz(r.z)+10, y2=mpz(r.z+r.d)-10; if(y2>y1)drawWin(y1,y2,OX,"v",WT); }
+    if(Math.abs(r.x+r.w-BLD.W)<0.2){ const y1=mpz(r.z)+10, y2=mpz(r.z+r.d)-10; if(y2>y1)drawWin(y1,y2,OX+BW2,"v",WT); }
+    if(Math.abs(r.z+r.d-BLD.D)<0.2){ const x1=mpx(r.x)+10, x2=mpx(r.x+r.w)-10; if(x2>x1)drawWin(x1,x2,OY+BH2,"h",WT); }
+  });
 }
 function drawWin(a,b,pos,dir,WT){
   if(dir==="h"){ // 가로 외벽 위 창: 벽 끊고 이중 유리선
@@ -1086,97 +1117,100 @@ let fanSpinners=[];
 
 /* 3D 모델: 건물 3개층을 적층 + 서버랙/CRAC/UPS/발전기/파이프/냉각타워 형상 */
 function build3D(){if(!scene)return;clearScene();fanSpinners=[];flowSystems=[];floorGroups={};rackMeshes=[];
-  const FW=220,FD=170,FH=46;          // 층 폭/깊이/높이(트윈 스케일)
-  const CX=110,CZ=90;                  // 평면 중심
-  // 층 그룹 생성 (각 층의 모든 요소를 담아 focusFloor 제어)
+  // SPACE 단일 좌표 기반 (2D와 동일). 건물 52×37m → 3D 유닛.
+  const FW=tux(BLD.W), FD=tuz(BLD.D), FH=tux(BLD.FH_M)*1.0+38;  // 폭/깊이/층고(가독 위해 약간 부풀림)
+  const CX=FW/2, CZ=FD/2;
+  // 실 중심좌표 변환 (SPACE 좌상단 x,z,w,d → 3D 중심 유닛)
+  const rcx=r=>tux(r.x+r.w/2), rcz=r=>tuz(r.z+r.d/2), rw=r=>tux(r.w), rd=r=>tuz(r.d);
   ["B1","1F","2F","roof"].forEach(k=>{const fg=new TJS.Group();fg.position.set(0,FLR[k].y,0);fg.userData={dyn:1,floor:k};scene.add(fg);floorGroups[k]=fg;});
-  // 해당 층 그룹 로컬좌표로 추가 (월드 y는 그룹이 담당하므로 로컬 y만)
   const addTo=(k,obj)=>{floorGroups[k].add(obj);return obj;};
-  // 설비 배치: 팩토리 Group을 층 로컬좌표에 두고 픽킹/정보 부여
   const place=(k,g,x,y,z,info)=>{g.position.set(x,y,z);if(info){g.traverse(o=>{if(o.isMesh){o.userData.info=info;pickables.push(o);}});g.userData.info=info;}addTo(k,g);return g;};
+  const ZC={"전력/POWER":0x8b5cf6,"냉각/COOL":0x2ec4b6,"서버/IT":0x2a7fd4,"관제/OPS":0xEF9F27,"공용/UTIL":0x5a6a7a,"코어/CORE":0x7a8a6a};
 
-  // ── 각 층 공통: 바닥 평면도(존 위에 앉히기) + 최소 골격 외피 ──
+  // ── 각 층 공통: 바닥 + 최소 골격 외피 + SPACE 실 존/라벨 자동 생성 ──
   ["B1","1F","2F","roof"].forEach(k=>{
-    if(k!=="roof"){const fp=floorPlate(FW,FD);fp.position.set(CX,0,CZ);addTo(k,fp);}
-    else{const rp=floorPlate(FW,FD);rp.position.set(CX,0,CZ);rp.children[0].material.color.setHex(0x0a131c);addTo(k,rp);} // 옥상 슬래브
-    if(k!=="roof"){ // 골격: 외곽선만 (면 거의 안보임)
+    const fp=floorPlate(FW,FD);fp.position.set(CX,0,CZ);if(k==="roof")fp.children[0].material.color.setHex(0x0a131c);addTo(k,fp);
+    if(k!=="roof"){
       const shell=new TJS.Mesh(new TJS.BoxGeometry(FW,FH-6,FD),new TJS.MeshStandardMaterial({color:0x14202e,transparent:true,opacity:.02,depthWrite:false,metalness:.1,roughness:1}));
       shell.position.set(CX,FH/2,CZ);addTo(k,shell);
       const edges=new TJS.LineSegments(new TJS.EdgesGeometry(shell.geometry),new TJS.LineBasicMaterial({color:0x2ec4b6,transparent:true,opacity:.45}));
       edges.position.copy(shell.position);addTo(k,edges);
-      [[-FW/2,-FD/2],[FW/2,-FD/2],[-FW/2,FD/2],[FW/2,FD/2]].forEach(([cx,cz])=>{const col=box(4,FH-6,4,0x1c3242,0x0a1822);col.material.opacity=.35;col.position.set(CX+cx,FH/2,CZ+cz);addTo(k,col);});
     }
-    const lb=lab(FLR[k].label.split(" ")[0],"#5ee0e8");lb.position.set(CX-FW/2-16,FH/2,CZ);addTo(k,lb);
+    // 골조 기둥 (그리드 교점, 600×600) — 2D와 동일 위치
+    if(k!=="roof")GRID.X.forEach(mx2=>GRID.Z.forEach(mz2=>{const col=box(tux(BLD.COL),FH-6,tux(BLD.COL),0x1c3242,0x0a1822);col.material.opacity=.4;col.position.set(tux(mx2),FH/2,tuz(mz2));addTo(k,col);}));
+    // SPACE 실 존 색면 + 바닥 라벨 (2D 평면도와 동일 좌표)
+    (SPACE[k]?SPACE[k].rooms:[]).forEach(r=>{addTo(k,zone(rcx(r),rcz(r),rw(r),rd(r),ZC[r.cat]||0x5a6a7a,r.tag));});
+    const lb=lab(k,"#5ee0e8");lb.position.set(-16,FH/2,CZ);addTo(k,lb);
   });
 
-  // ════ B1: 전력존 + 냉각존 ════
-  addTo("B1",zone(60,55,150,90,0x8b5cf6,"POWER ZONE"));
-  addTo("B1",zone(55,150,150,60,0x2ec4b6,"COOLING ZONE"));
-  for(let i=0;i<4;i++)place("B1",makeUPS(),20+i*22,16,40,{name:"UPS 모듈 "+(i+1),cat:"전력/POWER",desc:"무정전 15분 N+1. 배터리 캐비닛."});
-  addTo("B1",tagAt("UPS",55,34,40));
-  place("B1",makeTrafo(),150,14,40,{name:"수전·변압기",cat:"전력/POWER",desc:"22.9kV→저압. 부싱 3상 + 방열핀."});
-  addTo("B1",tagAt("MAIN-PWR",150,32,40));
-  place("B1",makeGen(),150,14,120,{name:"비상발전기",cat:"전력/POWER",desc:"1.25MVA 디젤. 라디에이터+배기스택. 자동기동 10초."});
-  addTo("B1",tagAt("GEN",150,30,120));
-  place("B1",makeChiller(),40,17,140,{name:"축열조·펌프",cat:"냉각/COOL",desc:"7℃/14℃ 순환. 단열탱크 + 펌프 2대."});
-  addTo("B1",tagAt("CW-PUMP",40,36,140));
+  // ── 설비 배치: SPACE 실 좌표에 맞춰 (2D와 동일 위치) ──
+  const room=(k,id)=>(SPACE[k]?SPACE[k].rooms:[]).find(r=>r.id===id);
+  const at=(k,id)=>{const r=room(k,id);return r?[rcx(r),rcz(r)]:[CX,CZ];};
+  // B1 전력/냉각
+  {const[x,z]=at("0","recv");place("B1",makeTrafo(),x,14,z,{name:"수전·변압기",cat:"전력/POWER",desc:"22.9kV→저압 변환."});addTo("B1",tagAt("MAIN-PWR",x,32,z));}
+  {const[x,z]=at("0","ups");for(let i=0;i<4;i++)place("B1",makeUPS(),x-30+i*20,16,z,{name:"UPS 모듈 "+(i+1),cat:"전력/POWER",desc:"무정전 15분 N+1."});addTo("B1",tagAt("UPS",x,34,z));}
+  {const[x,z]=at("0","gen");place("B1",makeGen(),x,14,z,{name:"비상발전기",cat:"전력/POWER",desc:"1.25MVA 디젤 N+1. 자동기동 10초."});addTo("B1",tagAt("GEN",x,30,z));}
+  {const[x,z]=at("0","pump");place("B1",makeChiller(),x,17,z,{name:"냉각수 펌프·축열조",cat:"냉각/COOL",desc:"7℃/14℃ 순환. 펌프 N+1 + 축열조."});addTo("B1",tagAt("CW-PUMP",x,36,z));}
+  // 1F 서버실 A(실 영역을 hall로) + NOC/로비/공조
+  {const r=room("1","srvA");if(r)build3DRacksG("1F",RACKS.A.slice(0,10),2,{x:rcx(r),z:rcz(r),w:rw(r),d:rd(r)},"A");}
+  {const[x,z]=at("1","noc");const noc=new TJS.Group();const nd=box(30,4,12,0x1a2530,0x0);nd.position.y=4;noc.add(nd);
+    for(let m=0;m<3;m++){const scr=new TJS.Mesh(new TJS.PlaneGeometry(9,6),emissive([0x5ee0e8,0x9FE1CB,0xEF9F27][m]));scr.position.set(-11+m*11,9,-6.5);noc.add(scr);}
+    place("1F",noc,x,2,z,{name:"NOC 통합관제실",cat:"관제/OPS",desc:"1인 통합관제. 3면 모니터월."});addTo("1F",tagAt("NOC",x,22,z));}
+  {const[x,z]=at("1","lobby");place("1F",reception(),x,2,z,{name:"로비·리셉션",cat:"관제/OPS",desc:"맨트랩 출입통제."});addTo("1F",tagAt("LOBBY",x,22,z));}
+  {const[x,z]=at("1","office1");place("1F",officeCluster(),x,2,z,{name:"운영 사무실",cat:"관제/OPS",desc:"정예팀 사무공간."});}
+  {const[x,z]=at("1","crac1");for(let i=0;i<3;i++)place("1F",makeCRAC(),x,17,z-30+i*30,{name:"인버터 CRAC-A "+(i+1),cat:"냉각/COOL",desc:"인버터 항온항습 N+1."});addTo("1F",tagAt("CRAC-A",x,40,z));}
+  // 2F 서버실 B + 데모/회의/사무/휴게/공조
+  {const r=room("2","srvB");if(r)build3DRacksG("2F",RACKS.B.slice(0,8),2,{x:rcx(r),z:rcz(r),w:rw(r),d:rd(r)},"B");}
+  {const[x,z]=at("2","demo");place("2F",showroom(),x,2,z,{name:"고객 데모실",cat:"관제/OPS",desc:"DT 관제 시연 쇼룸."});addTo("2F",tagAt("DEMO",x,22,z));}
+  {const[x,z]=at("2","meeting");place("2F",officeCluster(),x,2,z,{name:"회의실",cat:"관제/OPS",desc:"고객·내부 회의."});addTo("2F",tagAt("MEETING",x,22,z));}
+  {const[x,z]=at("2","office2");place("2F",officeCluster(),x,2,z,{name:"사무실",cat:"관제/OPS",desc:"운영·연구 업무."});}
+  {const[x,z]=at("2","crac2");for(let i=0;i<2;i++)place("2F",makeCRAC(),x,17,z-20+i*30,{name:"인버터 CRAC-B "+(i+1),cat:"냉각/COOL",desc:"서버실 B 전용."});}
 
-  // ════ 1F: 서버실 A(주력) + 공조 + NOC + 로비 — 면적 가중 ════
-  addTo("1F",zone(70,75,140,130,0x2a7fd4,"SERVER ROOM A"));           // 좌측 대형 서버홀
-  addTo("1F",zone(185,75,60,130,0x2ec4b6,"COOLING A"));               // 우측 공조 갤러리(세로 띠)
-  addTo("1F",zone(50,155,90,40,0xEF9F27,"NOC"));                      // 앞쪽 좌 관제
-  addTo("1F",zone(160,155,110,40,0x5a6a7a,"LOBBY"));                  // 앞쪽 우 로비
-  build3DRacksG("1F",RACKS.A.slice(0,10), 2, {x:70,z:75,w:140,d:130}, "A");
-  // NOC 콘솔(모니터월) + 운영 데스크
-  const noc=new TJS.Group();const ndesk=box(30,4,12,0x1a2530,0x0);ndesk.position.y=4;noc.add(ndesk);
-  for(let m=0;m<3;m++){const scr=new TJS.Mesh(new TJS.PlaneGeometry(9,6),emissive([0x5ee0e8,0x9FE1CB,0xEF9F27][m]));scr.position.set(-11+m*11,9,-6.5);noc.add(scr);noc.add(edgeBox(9,6,0.2,0x3a5a6a,.6).translateX(-11+m*11).translateY(9).translateZ(-6.5));}
-  place("1F",noc,45,2,150,{name:"NOC 통합관제실",cat:"관제/OPS",desc:"1인 통합관제. 3면 모니터월 + 운영 콘솔."});
-  place("1F",deskChair(),30,2,140);place("1F",deskChair(),60,2,140);
-  addTo("1F",tagAt("NOC",45,22,150));
-  // 로비 리셉션 + 응접
-  place("1F",reception(),150,2,162,{name:"로비·리셉션",cat:"관제/OPS",desc:"방문자 출입통제 + 안내데스크."});
-  place("1F",deskChair(),135,2,140);place("1F",deskChair(),165,2,140);
-  addTo("1F",tagAt("LOBBY",150,22,150));
-  // 공조 CRAC 3대
-  for(let i=0;i<3;i++)place("1F",makeCRAC(),180,17,40+i*38,{name:"인버터 CRAC-A "+(i+1),cat:"냉각/COOL",desc:"인버터 항온항습 N+1. 가변속 EC팬 + 가변냉매. 부분부하 효율 大, 정속 대비 절전."});
-  addTo("1F",tagAt("CRAC-A",180,40,80));
+  // ── 옥상: SPACE 실 좌표에 냉각/태양광 ──
+  {const r=room("roof","cool");const cx=r?rcx(r):40,cz0=r?tuz(r.z):10,cd=r?rd(r):FD;
+    for(let i=0;i<2;i++){const ct=makeCoolTower();place("roof",ct,cx-20,9,cz0+30+i*45,{name:"인버터 냉각타워 "+(i+1),cat:"냉각/COOL",desc:"인버터 가변속. COP 4.5↑."});if(ct.userData.fan)fanSpinners.push(ct.userData.fan);}
+    for(let i=0;i<4;i++){const iu=makeInverterUnit();place("roof",iu,cx-30+i*16,8,cz0+10,{name:"인버터 실외기 VRF "+(i+1),cat:"냉각/COOL",desc:"VRF 인버터. 30~40% 절전."});if(iu.userData.fan)fanSpinners.push(iu.userData.fan);}
+    addTo("roof",tagAt("인버터 냉각",cx,32,cz0+50));}
+  {const r=room("roof","solar");const sx=r?tux(r.x):90,sz=r?tuz(r.z):10,sw=r?rw(r):120,sd=r?rd(r):FD;
+    const cols=Math.max(4,Math.floor(sw/24)), rows=Math.max(3,Math.floor(sd/40));
+    for(let row=0;row<rows;row++)for(let col=0;col<cols;col++)
+      place("roof",makeSolar(),sx+14+col*22,8,sz+22+row*40,{name:`태양광 PV`,cat:"전력/POWER",desc:"재생에너지. 인버터 PCS 계통연계."});
+    addTo("roof",tagAt("태양광 어레이",sx+sw/2,22,sz+20));}
 
-  // ════ 2F: 서버실 B(주력, 면적 가중 大) + 사무/데모/화장실(우측 좁은 띠) ════
-  // 데이터센터 특성상 서버실이 평면의 대부분(~65%)을 차지하도록 면적 가중
-  addTo("2F",zone(75,90,150,160,0x2a7fd4,"SERVER ROOM B"));            // 좌측 대형 서버홀
-  addTo("2F",zone(185,145,60,55,0x6DA9A0,"OFFICE"));                   // 우측 앞 사무
-  addTo("2F",zone(185,82,60,50,0xEF9F27,"DEMO"));                      // 우측 중앙 데모
-  addTo("2F",zone(185,28,60,38,0xb0c0c8,"WC"));                        // 우측 뒤 화장실
-  build3DRacksG("2F",RACKS.B.slice(0,8), 2, {x:75,z:90,w:150,d:160}, "B");  // 대형 서버홀 — 8랙 + 증설여유
-  place("2F",officeCluster(),185,2,150,{name:"운영 사무실",cat:"관제/OPS",desc:"엔지니어 사무공간. 파티션 4석."});
-  addTo("2F",tagAt("OFFICE",185,22,150));
-  place("2F",showroom(),185,2,82,{name:"고객 데모실",cat:"관제/OPS",desc:"DT 관제 시연 쇼룸 + 대형 디스플레이월."});
-  addTo("2F",tagAt("DEMO",185,22,82));
-  place("2F",restroom(),185,2,28,{name:"화장실",cat:"건축/CORE",desc:"남녀 분리 위생설비."});
+  // ── 수직 코어: 계단A·EV·WC·PS·계단B를 전 층 동일 위치에 관통 (건축 정합 핵심) ──
+  COREZONE.forEach(cr=>{
+    const cx=tux(cr.x+cr.w/2), cz=tuz(cr.z+cr.d/2), cw=tux(cr.w)*0.9, cd=tuz(cr.d)*0.9;
+    const box3=box(cw,FH*3,cd,cr.stair?0x3a4a3a:cr.wc?0x4a5a6a:0x5a4a6a,0x0a120a);
+    box3.material.opacity=.32;box3.material.transparent=true;box3.position.set(cx,FH*1.5-FH,cz);  // B1~2F 관통(중심 1F 기준)
+    box3.userData={dyn:1,info:{name:cr.name,cat:cr.cat,desc:cr.desc}};scene.add(box3);pickables.push(box3);
+    const tg=tagAt(cr.tag,cx,FH+10,cz);scene.add(tg);
+  });
+  // 수직 냉각 파이프 (코어 인접, 전층 관통)
+  const pcx=tux(45.5)-12,pcz=tuz(11)+4;
+  const pipe=cyl(2.2,FH*3+10,0x2aa0ff,0x144);pipe.position.set(pcx,FH/2,pcz);pipe.userData={dyn:1};scene.add(pipe);
 
-  // ════ 옥상: 냉각타워 + 태양광 ════
-  // 냉각존(좌측 띠) — 인버터 냉각타워 + VRF 인버터 실외기
-  addTo("roof",zone(45,90,70,160,0x2ec4b6,"INVERTER COOLING"));
-  // 태양광존(우측 대부분) — 현실적 대면적
-  addTo("roof",zone(150,90,130,160,0x2a7fd4,"SOLAR PV ARRAY"));
-  for(let i=0;i<2;i++){const ct=makeCoolTower();place("roof",ct,30+i*40,9,50,{name:"인버터 냉각타워 "+(i+1),cat:"냉각/COOL",desc:"인버터 가변속 팬·펌프. 부하 추종 RPM 제어 → 부분부하 효율 大, COP 4.5↑."});if(ct.userData.fan)fanSpinners.push(ct.userData.fan);}
-  for(let i=0;i<4;i++){const iu=makeInverterUnit();place("roof",iu,20+i*18,8,128,{name:"인버터 실외기 VRF "+(i+1),cat:"냉각/COOL",desc:"가변냉매유량(VRF) 인버터 컴프레서. 정속 대비 30~40% 절전."});if(iu.userData.fan)fanSpinners.push(iu.userData.fan);}
-  addTo("roof",tagAt("인버터 냉각",45,32,50));
-  // 대규모 태양광 어레이 — 6열×3행 = 18 패널(옥상 가용면적 최대 활용)
-  for(let row=0;row<3;row++)for(let col=0;col<6;col++)
-    place("roof",makeSolar(),95+col*22,8,38+row*52,{name:`태양광 PV ${row*6+col+1}`,cat:"전력/POWER",desc:"재생에너지 어레이. 인버터 PCS 계통연계. 옥상 가용면적 최대 활용."});
-  addTo("roof",tagAt("태양광 PV 어레이",150,22,40));
+  // ── ESS 별동 (주건물 우측 이격, 단층) ──
+  buildESS(FW,FH);
 
-  // ── 전층 관통: 비상계단 코어 + 수직 냉각 파이프(scene 직속, 그룹 무관) ──
-  const core=box(16,FH*3,20,0x3a4a3a,0x0a120a);core.material.opacity=.35;core.material.transparent=true;
-  core.position.set(205,FH/2,160);core.userData={dyn:1,info:{name:"비상계단 코어",cat:"건축/CORE",desc:"전 층 관통 직통계단. 방화구획."}};scene.add(core);pickables.push(core);
-  const pipe=cyl(2.2,FH*3+10,0x2ec4b6,0x144);pipe.position.set(72,FH/2,92);pipe.userData={dyn:1};scene.add(pipe);
-  for(let k=0;k<7;k++){const band=cyl(2.6,1.4,0x166258,0x0,12);band.position.set(72,-FH+8+k*20,92);band.userData={dyn:1};scene.add(band);}
-
-  buildFlows(FH);          // 계측 흐름 dot 시스템 생성 (기본 숨김)
-  buildMEP(FH);            // MEP 계통 배치도 생성 (기본 숨김)
+  buildFlows(FH);
+  buildMEP(FH);
   setMetricVisibility();
   setMepVisibility();
+}
+/* ESS 별동 — 주건물과 이격된 단층 컨테이너 뱅크 */
+function buildESS(FW,FH){
+  const g=new TJS.Group();g.userData={dyn:1};
+  const ex=tux(ESS.offX), ez=tuz(ESS.offZ), ew=tux(ESS.w), ed=tuz(ESS.d), eh=tux(ESS.h);
+  // 별동 바닥 슬래브
+  const slab=box(ew+8,2,ed+8,0x0d1722,0x0);slab.position.set(ex+ew/2,-FH,ez+ed/2);g.add(slab);
+  // LFP 컨테이너 뱅크 (4모듈)
+  for(let i=0;i<4;i++){const c=box(ew-6,eh,ed/4-2,0x2a4a6a,0x0a2030);c.material.metalness=.7;c.position.set(ex+ew/2,-FH+eh/2,ez+ed/8+i*ed/4);g.add(c);
+    g.add(edgeBox(ew-6,eh,ed/4-2,0x4ad0c0,.5).translateX(ex+ew/2).translateY(-FH+eh/2).translateZ(ez+ed/8+i*ed/4));
+    const led=new TJS.Mesh(new TJS.PlaneGeometry(3,1.5),emissive(0x39d98a));led.position.set(ex+ew-2,-FH+eh*0.7,ez+ed/8+i*ed/4);led.rotation.y=Math.PI/2;g.add(led);}
+  const lb=lab("ESS 별동","#9fe06a");lb.position.set(ex+ew/2,-FH+eh+8,ez+ed/2);lb.scale.set(40,10,1);g.add(lb);
+  g.traverse(o=>{if(o.isMesh)o.userData.info={name:ESS.name,cat:ESS.cat,desc:ESS.desc};});
+  g.traverse(o=>{if(o.isMesh)pickables.push(o);});
+  scene.add(g);
 }
 function tagAt(t,x,y,z){const s=lab(t,"#9FE1CB");s.position.set(x,y,z);s.userData={dyn:1};return s;}
 
