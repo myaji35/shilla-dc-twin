@@ -1237,18 +1237,27 @@ function focusFloor(key){
       }
     });
   });
+  // 층 포커스 시 전층 관통 배관/배선은 흐리게(선택층 가독성↑)
+  setLoopDim(true);
   // 카메라를 선택층 높이로 부드럽게 이동
   const ty=FLR[key].y;
-  tweenCam({x:150,y:ty+70,z:230},{x:110,y:ty+10,z:90});
+  // 층 전체가 한눈에 들어오도록 충분히 줌아웃 (대표님 요청 — 가까운 줌인 완화)
+  tweenCam({x:235,y:ty+150,z:340},{x:110,y:ty+5,z:95});
   // 층 버튼 active 표시
   document.querySelectorAll('.floorBtn').forEach(b=>b.classList.toggle('on',b.dataset.fl===key));
   updateMetricHUD();
 }
+function setLoopDim(dim){
+  [coolPipeGroup,powerLineGroup].forEach(g=>{if(!g)return;g.traverse(o=>{
+    if(o.material){if(o.userData.baseOpacity==null)o.userData.baseOpacity=(o.material.opacity!=null?o.material.opacity:1);
+      o.material.transparent=true;o.material.opacity=dim?Math.min(o.userData.baseOpacity,.12):o.userData.baseOpacity;}});});
+}
 function focusAll(){
   activeFloor=null;
   Object.keys(floorGroups).forEach(k=>floorGroups[k].traverse(o=>{if(o.material&&o.userData.baseOpacity!=null)o.material.opacity=o.userData.baseOpacity;}));
+  setLoopDim(false);
   document.querySelectorAll('.floorBtn').forEach(b=>b.classList.remove('on'));
-  tweenCam({x:240,y:240,z:300},{x:110,y:30,z:90});
+  tweenCam({x:300,y:280,z:380},{x:110,y:30,z:90});
   updateMetricHUD();
 }
 function tweenCam(toPos,toTgt){
