@@ -128,6 +128,19 @@ aside{width:312px;background:var(--panel2);border-left:1px solid var(--line2);ov
 .hwslot .hwr span{display:inline-block;width:30px;color:var(--sub);flex-shrink:0;}
 .backbtn{margin-top:12px;text-align:center;background:rgba(46,196,182,.14);border:1px solid var(--line2);border-radius:4px;padding:8px;font-size:11px;color:var(--cyan);cursor:pointer;font-family:var(--mono);transition:all .15s;}
 .backbtn:hover{background:rgba(46,196,182,.25);}
+/* 운영 데이터 레이어 — 자산정보·알람·작업지시 */
+.assetbox{background:rgba(8,20,32,.6);border:1px solid var(--line2);border-radius:6px;padding:8px 10px;margin-bottom:8px;font-family:var(--mono);}
+.assetbox .ar{display:flex;justify-content:space-between;font-size:10.5px;padding:2px 0;color:#bcd6ce;gap:8px;}
+.assetbox .ar span{color:var(--sub);flex-shrink:0;}
+.assetbox .ar b{color:#5ee0e8;}
+.albadge{font-family:var(--mono);font-size:11px;font-weight:600;padding:6px 10px;border-radius:5px;margin-bottom:8px;}
+.albadge.ok{background:rgba(57,217,138,.12);color:#5fdca0;border:1px solid rgba(57,217,138,.3);}
+.albadge.warn{background:rgba(239,159,39,.14);color:#ffcb6a;border:1px solid rgba(239,159,39,.4);}
+.albadge.crit{background:rgba(226,75,74,.16);color:#ff8a82;border:1px solid rgba(226,75,74,.5);animation:alpulse 1.2s infinite;}
+@keyframes alpulse{0%,100%{opacity:1}50%{opacity:.55}}
+.wobtn{width:100%;margin-top:10px;padding:9px;font:600 12px var(--mono);color:#cde6ff;background:linear-gradient(90deg,#1a3a5a,#10202c);border:1px solid #2a6a9a;border-radius:6px;cursor:pointer;transition:.15s;}
+.wobtn:hover{background:linear-gradient(90deg,#22507a,#10202c);border-color:#3aa0ff;}
+.wobtn.done{background:linear-gradient(90deg,#1a4a2a,#10202c);border-color:#39d98a;color:#9fe6c0;cursor:default;}
 footer{padding:5px 18px;font-size:9px;color:var(--sub);background:rgba(8,14,22,.7);border-top:1px solid var(--line);text-align:center;font-family:var(--mono);}
 @keyframes bl{0%,100%{opacity:1;}50%{opacity:.3;}}
 @keyframes pulse{0%,100%{r:4;opacity:1;}50%{r:6;opacity:.5;}}
@@ -823,7 +836,15 @@ document.querySelectorAll('.tab').forEach(b=>b.addEventListener('click',()=>{
 function setActiveTab(b){document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));b.classList.add('active');}
 function tick(){document.getElementById('clock').textContent=new Date().toTimeString().slice(0,8);}
 setInterval(tick,1000);tick();
-setInterval(()=>{document.getElementById('tAvg').textContent=(23.4+(Math.random()*2-1)*.6).toFixed(1)+"°C";},2200);
+// 실시간 센서 틱 — 랙 온도/부하 추세, 임계 알람, 상단 KPI·이슈 갱신
+setInterval(()=>{
+  tickSensors();
+  const all=[...RACKS.A,...RACKS.B].filter(r=>r.active||r.load>5);
+  const avgT=(all.reduce((a,r)=>a+r.maxTemp,0)/all.length).toFixed(1);
+  document.getElementById('tAvg').textContent=avgT+"°C";
+  if(typeof renderIssues==="function"&&document.getElementById('issueList'))renderIssues();
+  if(typeof updateMetricHUD==="function")updateMetricHUD();
+},2500);
 
 /* === 3영역(1F·2F·B1) 평면도 자동 로테이션 — 항상 동작, 일시정지만 가능 === */
 let autoTimer,holdUntil=0;
@@ -856,8 +877,14 @@ const ISSUES=[
   {sev:"wn",t:"UPS 모듈3 부하 88% 임계",sub:"8분 전 · 부하 재분배 검토",fl:"B1"},
   {sev:"",t:"야간 유휴 GPU 28장 절전 전환",sub:"2시간 전 · 34kWh 절약",fl:"2F"},
 ];
+function rackFloor(id){return id&&id[2]==="A"?"1F":id&&id[2]==="B"?"2F":"1F";}
 function renderIssues(){const el=document.getElementById('issueList');if(!el)return;
-  el.innerHTML=ISSUES.map(i=>`<div class="iss ${i.sev}" data-fl="${i.fl}"><b>${i.t}</b><div class="t">${i.sub} · 층:${i.fl}</div></div>`).join("");
+  // 실시간 알람(센서 기반) + 고정 운영 알림
+  const live=alarmHistory.slice(0,4).map(a=>({sev:a.sev==="crit"?"rd":"wn",
+    t:`${a.id} ${a.sev==="crit"?"임계 초과":"경고"} — ${a.msg.split(" ").slice(1).join(" ")}`,
+    sub:"실시간 센서 감지 · AI 자동조치 검토", fl:rackFloor(a.id)}));
+  const rows=live.length?live.concat(ISSUES.slice(2)):ISSUES;
+  el.innerHTML=rows.map(i=>`<div class="iss ${i.sev}" data-fl="${i.fl}"><b>${i.t}</b><div class="t">${i.sub} · 층:${i.fl}</div></div>`).join("");
   el.querySelectorAll('.iss').forEach(d=>d.onclick=()=>{const fl=d.dataset.fl;if(fl&&floorGroups[fl]){setView('3d');setTimeout(()=>focusFloor(fl),60);}});}
 function wireLeftRail(){
   document.querySelectorAll('.floorBtn').forEach(b=>b.onclick=()=>{const fl=b.dataset.fl;
