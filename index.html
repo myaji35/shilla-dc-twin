@@ -49,9 +49,13 @@ main{flex:1;display:flex;min-height:0;}
 #leftRail{width:230px;background:var(--panel2,#0e1824);border-right:1px solid var(--line2,#1b3242);overflow-y:auto;padding:10px 10px 16px;display:flex;flex-direction:column;gap:6px;}
 .lrTitle{font:600 11px 'Courier New',monospace;color:#6fcabb;letter-spacing:.5px;margin:8px 0 2px;}
 #miniThree{width:100%;height:150px;background:radial-gradient(circle at 50% 30%,#11283a,#0a131c);border:1px solid #1b3242;border-radius:8px;overflow:hidden;}
-#floorBtns,#metBtns{display:flex;flex-direction:column;gap:4px;}
-.floorBtn,.metBtn{text-align:left;padding:7px 9px;font:600 12px 'Courier New',monospace;color:#bfe0d8;background:#10202c;border:1px solid #1d3543;border-radius:6px;cursor:pointer;transition:.15s;}
-.floorBtn:hover,.metBtn:hover{background:#163040;border-color:#2ec4b6;color:#dff4ec;}
+#floorBtns,#metBtns,#mepBtns{display:flex;flex-direction:column;gap:4px;}
+.floorBtn,.metBtn,.mepBtn{text-align:left;padding:7px 9px;font:600 12px 'Courier New',monospace;color:#bfe0d8;background:#10202c;border:1px solid #1d3543;border-radius:6px;cursor:pointer;transition:.15s;}
+.floorBtn:hover,.metBtn:hover,.mepBtn:hover{background:#163040;border-color:#2ec4b6;color:#dff4ec;}
+.mepBtn[data-s="power"].on{border-color:#EFC94B;color:#ffe9a8;box-shadow:0 0 10px rgba(239,201,75,.3);background:linear-gradient(90deg,#2a4010,#10202c);}
+.mepBtn[data-s="network"].on{border-color:#3aa0ff;color:#cde6ff;box-shadow:0 0 10px rgba(58,160,255,.3);background:linear-gradient(90deg,#0e2a4a,#10202c);}
+.mepBtn[data-s="hvac"].on{border-color:#2ec4b6;color:#bff0e8;box-shadow:0 0 10px rgba(46,196,182,.3);background:linear-gradient(90deg,#0e3a36,#10202c);}
+.mepBtn[data-s="water"].on{border-color:#1ec8d8;color:#bfeef4;box-shadow:0 0 10px rgba(30,200,216,.3);background:linear-gradient(90deg,#0e3640,#10202c);}
 .floorBtn.on{background:linear-gradient(90deg,#1a5a52,#10202c);border-color:#2ec4b6;color:#9FE1CB;box-shadow:0 0 10px rgba(46,196,182,.3);}
 .floorBtn.allBtn{color:#8aa0aa;font-size:11px;}
 .metBtn.on{background:linear-gradient(90deg,#2a4a1a,#10202c);border-color:#EFC94B;color:#ffe9a8;box-shadow:0 0 10px rgba(239,201,75,.25);}
@@ -165,6 +169,13 @@ footer{padding:5px 18px;font-size:9px;color:var(--sub);background:rgba(8,14,22,.
         <button class="floorBtn" data-fl="1F">▤ 1F · 로비/관제/서버A</button>
         <button class="floorBtn" data-fl="B1">▤ B1 · 전력/냉각</button>
         <button class="floorBtn allBtn" data-fl="">⟲ 전체 보기</button>
+      </div>
+      <div class="lrTitle">▌ 설비 계통 배치도 (MEP)</div>
+      <div id="mepBtns">
+        <button class="mepBtn" data-s="power">⚡ 전기 계통</button>
+        <button class="mepBtn" data-s="network">🖧 네트워크</button>
+        <button class="mepBtn" data-s="hvac">🌀 공조 덕트</button>
+        <button class="mepBtn" data-s="water">💧 냉수 배관</button>
       </div>
       <div class="lrTitle">▌ 계측 시연</div>
       <div id="metBtns">
@@ -698,6 +709,7 @@ function wireLeftRail(){
     if(!fl){focusAll();return;}
     if(view!=="3d"){setView('3d');setTimeout(()=>focusFloor(fl),80);}else focusFloor(fl);});
   document.querySelectorAll('.metBtn').forEach(b=>b.onclick=()=>toggleMetric(b.dataset.m));
+  document.querySelectorAll('.mepBtn').forEach(b=>b.onclick=()=>toggleMep(b.dataset.s));
   renderIssues();
 }
 /* 미니뷰: 경량 scene (3층 외곽선 박스 + 존 색점) 항상 자동회전 */
@@ -726,6 +738,10 @@ let TJS,scene,camera,renderer,controls,raycaster,mouse,threeReady=false,pickable
 let floorGroups={},activeFloor=null,camTween=null;
 let metricOn={heat:false,power:false,cool:false,occ:false};
 let flowSystems=[];          // {dots:[meshes], path:[Vec3], speed, group}
+let occupants=[];            // 익명 재실자 아바타 (신원은 별도 디바이스 보정)
+let metricOcc=true;          // 사람 이용(재실) 표시 토글
+let mepGroups={};            // MEP 계통 Group {power,network,hvac,water}
+let mepOn={power:false,network:false,hvac:false,water:false};
 let miniRenderer,miniScene,miniCamera,miniGroup;
 const FLR={B1:{y:-46,label:"B1 · 전력/냉각"},"1F":{y:0,label:"1F · 로비/관제/서버A"},"2F":{y:46,label:"2F · 서버B/사무"},roof:{y:92,label:"옥상 · 냉각/태양광"}};
 function ensureThree(cb){if(threeReady){cb();return;}
@@ -743,8 +759,8 @@ function lab(text,color){ // CanvasTexture sprite 라벨 (k1nurifarm 패턴)
 function initThree(){const wrap=document.getElementById('three'),W=wrap.clientWidth,H=wrap.clientHeight;
   scene=new TJS.Scene();scene.background=new TJS.Color(0x0c1420);scene.fog=new TJS.FogExp2(0x0c1420,.0016);
   camera=new TJS.PerspectiveCamera(42,W/H,.1,4000);
-  // 드론뷰 초기 위치: 설비 디테일이 보이는 적당한 부감 거리
-  camera.position.set(250,220,300);
+  // 드론뷰 초기 위치: 건물 전체가 한눈에 들어오는 부감 거리
+  camera.position.set(330,300,400);
   renderer=new TJS.WebGLRenderer({antialias:true});renderer.setSize(W,H);renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
   renderer.physicallyCorrectLights=false;renderer.outputEncoding=TJS.sRGBEncoding;renderer.toneMapping=TJS.ACESFilmicToneMapping;renderer.toneMappingExposure=1.18;wrap.appendChild(renderer.domElement);
   controls=new TJS.OrbitControls(camera,renderer.domElement);controls.target.set(110,30,90);controls.enableDamping=true;controls.dampingFactor=.08;controls.maxPolarAngle=Math.PI/2.05;controls.minDistance=140;controls.maxDistance=820;
@@ -968,12 +984,12 @@ function build3D(){if(!scene)return;clearScene();fanSpinners=[];flowSystems=[];f
   place("B1",makeChiller(),40,17,140,{name:"축열조·펌프",cat:"냉각/COOL",desc:"7℃/14℃ 순환. 단열탱크 + 펌프 2대."});
   addTo("B1",tagAt("CW-PUMP",40,36,140));
 
-  // ════ 1F: 로비 + 관제(NOC) + 서버실 A + 공조 ════
-  addTo("1F",zone(60,60,120,100,0x2a7fd4,"SERVER ROOM A"));
-  addTo("1F",zone(180,60,60,80,0x2ec4b6,"COOLING A"));
-  addTo("1F",zone(45,150,70,50,0xEF9F27,"NOC"));
-  addTo("1F",zone(150,150,110,50,0x5a6a7a,"LOBBY / RECEPTION"));
-  build3DRacksG("1F",RACKS.A.slice(0,10), 40, 2, 60, "A");
+  // ════ 1F: 서버실 A(주력) + 공조 + NOC + 로비 — 면적 가중 ════
+  addTo("1F",zone(70,75,140,130,0x2a7fd4,"SERVER ROOM A"));           // 좌측 대형 서버홀
+  addTo("1F",zone(185,75,60,130,0x2ec4b6,"COOLING A"));               // 우측 공조 갤러리(세로 띠)
+  addTo("1F",zone(50,155,90,40,0xEF9F27,"NOC"));                      // 앞쪽 좌 관제
+  addTo("1F",zone(160,155,110,40,0x5a6a7a,"LOBBY"));                  // 앞쪽 우 로비
+  build3DRacksG("1F",RACKS.A.slice(0,10), 2, {x:70,z:75,w:140,d:130}, "A");
   // NOC 콘솔(모니터월) + 운영 데스크
   const noc=new TJS.Group();const ndesk=box(30,4,12,0x1a2530,0x0);ndesk.position.y=4;noc.add(ndesk);
   for(let m=0;m<3;m++){const scr=new TJS.Mesh(new TJS.PlaneGeometry(9,6),emissive([0x5ee0e8,0x9FE1CB,0xEF9F27][m]));scr.position.set(-11+m*11,9,-6.5);noc.add(scr);noc.add(edgeBox(9,6,0.2,0x3a5a6a,.6).translateX(-11+m*11).translateY(9).translateZ(-6.5));}
@@ -988,17 +1004,18 @@ function build3D(){if(!scene)return;clearScene();fanSpinners=[];flowSystems=[];f
   for(let i=0;i<3;i++)place("1F",makeCRAC(),180,17,40+i*38,{name:"CRAC-A "+(i+1),cat:"냉각/COOL",desc:"항온항습 N+1. 상향 송풍 + 냉매 2계통."});
   addTo("1F",tagAt("CRAC-A",180,40,80));
 
-  // ════ 2F: 서버실 B + 사무 + 데모실 + 화장실 ════
-  addTo("2F",zone(60,55,120,90,0x2a7fd4,"SERVER ROOM B"));
-  addTo("2F",zone(60,150,110,50,0x6DA9A0,"OFFICE"));
-  addTo("2F",zone(160,150,80,50,0xEF9F27,"DEMO SHOWROOM"));
-  addTo("2F",zone(185,55,50,40,0xb0c0c8,"WC"));
-  build3DRacksG("2F",RACKS.B.slice(0,6), 40, 2, 50, "B");
-  place("2F",officeCluster(),55,2,150,{name:"운영 사무실",cat:"관제/OPS",desc:"엔지니어 사무공간. 파티션 4석."});
-  addTo("2F",tagAt("OFFICE",55,22,150));
-  place("2F",showroom(),165,2,152,{name:"고객 데모실",cat:"관제/OPS",desc:"DT 관제 시연 쇼룸 + 대형 디스플레이월."});
-  addTo("2F",tagAt("DEMO",165,22,150));
-  place("2F",restroom(),185,2,55,{name:"화장실",cat:"건축/CORE",desc:"남녀 분리 위생설비."});
+  // ════ 2F: 서버실 B(주력, 면적 가중 大) + 사무/데모/화장실(우측 좁은 띠) ════
+  // 데이터센터 특성상 서버실이 평면의 대부분(~65%)을 차지하도록 면적 가중
+  addTo("2F",zone(75,90,150,160,0x2a7fd4,"SERVER ROOM B"));            // 좌측 대형 서버홀
+  addTo("2F",zone(185,145,60,55,0x6DA9A0,"OFFICE"));                   // 우측 앞 사무
+  addTo("2F",zone(185,82,60,50,0xEF9F27,"DEMO"));                      // 우측 중앙 데모
+  addTo("2F",zone(185,28,60,38,0xb0c0c8,"WC"));                        // 우측 뒤 화장실
+  build3DRacksG("2F",RACKS.B.slice(0,8), 2, {x:75,z:90,w:150,d:160}, "B");  // 대형 서버홀 — 8랙 + 증설여유
+  place("2F",officeCluster(),185,2,150,{name:"운영 사무실",cat:"관제/OPS",desc:"엔지니어 사무공간. 파티션 4석."});
+  addTo("2F",tagAt("OFFICE",185,22,150));
+  place("2F",showroom(),185,2,82,{name:"고객 데모실",cat:"관제/OPS",desc:"DT 관제 시연 쇼룸 + 대형 디스플레이월."});
+  addTo("2F",tagAt("DEMO",185,22,82));
+  place("2F",restroom(),185,2,28,{name:"화장실",cat:"건축/CORE",desc:"남녀 분리 위생설비."});
 
   // ════ 옥상: 냉각타워 + 태양광 ════
   addTo("roof",zone(84,45,150,60,0x2ec4b6,"COOLING TOWER"));
@@ -1015,7 +1032,9 @@ function build3D(){if(!scene)return;clearScene();fanSpinners=[];flowSystems=[];f
   for(let k=0;k<7;k++){const band=cyl(2.6,1.4,0x166258,0x0,12);band.position.set(72,-FH+8+k*20,92);band.userData={dyn:1};scene.add(band);}
 
   buildFlows(FH);          // 계측 흐름 dot 시스템 생성 (기본 숨김)
+  buildMEP(FH);            // MEP 계통 배치도 생성 (기본 숨김)
   setMetricVisibility();
+  setMepVisibility();
 }
 function tagAt(t,x,y,z){const s=lab(t,"#9FE1CB");s.position.set(x,y,z);s.userData={dyn:1};return s;}
 
@@ -1031,6 +1050,74 @@ function buildFlows(FH){
   // 열 흐름(냉기, 청색): CRAC(180,17,80) → 서버랙 콜드아일(60,17,80)
   const heatPath=[[180,14,80],[140,16,80],[100,17,80],[60,18,80]];
   const hflow=makeFlow(heatPath,0x5ad6ff,8,0.006,1.0);hflow.userData={dyn:1,metric:"heat"};scene.add(hflow);
+}
+
+/* ===== MEP 계통 배치도 (전기/네트워크/공조덕트/냉수배관) ===== */
+// 두 점 사이 굵은 색 부스바/케이블/배관 — 직각 라우팅(맨해튼)
+function runBus(grp,color,radius,pts){
+  for(let i=0;i<pts.length-1;i++){const a=new TJS.Vector3(...pts[i]),b=new TJS.Vector3(...pts[i+1]);
+    const len=a.distanceTo(b);const m=new TJS.Mesh(new TJS.CylinderGeometry(radius,radius,len,8),new TJS.MeshStandardMaterial({color,emissive:color,emissiveIntensity:.35,metalness:.6,roughness:.4}));
+    m.position.copy(a).lerp(b,.5);m.quaternion.setFromUnitVectors(new TJS.Vector3(0,1,0),b.clone().sub(a).normalize());grp.add(m);}
+}
+// 사각 덕트(공조) — 두 점 사이 박스 덕트
+function runDuct(grp,color,w,pts){
+  for(let i=0;i<pts.length-1;i++){const a=new TJS.Vector3(...pts[i]),b=new TJS.Vector3(...pts[i+1]);
+    const len=a.distanceTo(b);const m=new TJS.Mesh(new TJS.BoxGeometry(w,w,len),new TJS.MeshStandardMaterial({color,transparent:true,opacity:.45,metalness:.3,roughness:.6}));
+    m.position.copy(a).lerp(b,.5);m.quaternion.setFromUnitVectors(new TJS.Vector3(0,0,1),b.clone().sub(a).normalize());grp.add(m);
+    const eb=edgeBox(w,w,len,color,.5);eb.position.copy(m.position);eb.quaternion.copy(m.quaternion);grp.add(eb);}
+}
+function node3(grp,color,x,y,z,r){const m=new TJS.Mesh(new TJS.SphereGeometry(r||2,10,10),new TJS.MeshStandardMaterial({color,emissive:color,emissiveIntensity:.6}));m.position.set(x,y,z);grp.add(m);return m;}
+function buildMEP(FH){
+  mepGroups={};
+  // 좌표는 build3D 설비 위치와 정합 (월드 좌표)
+  // ── 전기 계통(노랑): 수전→변압기→UPS→PDU→랙 부스바 ──
+  const ep=new TJS.Group();ep.userData={dyn:1,mep:"power"};ep.visible=false;
+  node3(ep,0xEFC94B,150,-FH+24,40,3); // 변압기
+  runBus(ep,0xEFC94B,1.1,[[150,-FH+24,40],[55,-FH+24,40]]);          // 변압기→UPS뱅크
+  [20,42,64,86].forEach(x=>node3(ep,0xEFC94B,x,-FH+26,40,2));         // UPS 4
+  runBus(ep,0xEFC94B,.9,[[55,-FH+26,40],[55,-FH+26,90],[55,-2,90],[55,18,80]]); // B1→1F 수직 라이저
+  runBus(ep,0xEFC94B,1.0,[[40,20,60],[95,20,60],[95,20,90],[40,20,90]]); // 1F 서버랙 상부 부스바 루프
+  [40,55,70,85].forEach(x=>node3(ep,0xEFC94B,x,20,75,1.4));            // PDU 노드
+  scene.add(ep);mepGroups.power=ep;
+  // ── 네트워크(청색): 코어스위치→ToR(랙상단)→오버헤드 케이블 트레이 ──
+  const nt=new TJS.Group();nt.userData={dyn:1,mep:"network"};nt.visible=false;
+  node3(nt,0x3aa0ff,45,24,150,3);                                     // 코어 스위치(NOC)
+  runBus(nt,0x3aa0ff,.8,[[45,28,150],[60,28,90],[60,28,60]]);         // 코어→서버실 트레이
+  runBus(nt,0x3aa0ff,1.0,[[40,30,60],[95,30,60]]);                    // 오버헤드 케이블 트레이 A
+  runBus(nt,0x3aa0ff,1.0,[[40,30,90],[95,30,90]]);                    // 트레이 B
+  [40,55,70,85].forEach(x=>{node3(nt,0x3aa0ff,x,26,60,1.3);node3(nt,0x3aa0ff,x,26,90,1.3);}); // ToR 스위치
+  // 2F 네트워크 라이저
+  runBus(nt,0x3aa0ff,.8,[[60,30,60],[60,FH+30,55]]);
+  runBus(nt,0x3aa0ff,1.0,[[40,FH+30,50],[95,FH+30,50]]);
+  scene.add(nt);mepGroups.network=nt;
+  // ── 공조 덕트(청록): CRAC→상부 급기덕트→콜드아일 취출구 + 리턴 ──
+  const hv=new TJS.Group();hv.userData={dyn:1,mep:"hvac"};hv.visible=false;
+  runDuct(hv,0x2ec4b6,6,[[180,34,80],[120,34,80],[60,34,80]]);        // 급기 메인덕트
+  [50,65,80,95].forEach(z=>runDuct(hv,0x2ec4b6,3,[[60,34,z],[60,22,z]]));// 콜드아일 취출 분기
+  runDuct(hv,0x1a8f82,5,[[60,40,100],[180,40,100],[180,34,80]]);      // 리턴 덕트
+  // 2F 공조
+  runDuct(hv,0x2ec4b6,6,[[180,FH+34,60],[60,FH+34,55]]);
+  scene.add(hv);mepGroups.hvac=hv;
+  // ── 냉수 배관(진청록): 축열조↔펌프↔CRAC↔냉각타워 ──
+  const wt=new TJS.Group();wt.userData={dyn:1,mep:"water"};wt.visible=false;
+  runBus(wt,0x1ec8d8,1.4,[[40,-FH+17,140],[100,-FH+17,120],[180,12,70]]); // 축열조→1F CRAC
+  runBus(wt,0x1ec8d8,1.4,[[180,20,60],[180,40,60],[120,FH+30,90],[72,FH*2+9,60]]); // CRAC→옥상 냉각타워(라이저)
+  runBus(wt,0x0e8a96,1.2,[[40,FH*2+9,45],[72,FH*2+9,90],[72,-FH+20,90],[40,-FH+17,140]]); // 환수 리턴
+  scene.add(wt);mepGroups.water=wt;
+}
+function toggleMep(sys){
+  mepOn[sys]=!mepOn[sys];
+  document.querySelectorAll('.mepBtn[data-s="'+sys+'"]').forEach(b=>b.classList.toggle('on',mepOn[sys]));
+  setMepVisibility();
+}
+function setMepVisibility(){
+  const any=Object.values(mepOn).some(v=>v);
+  Object.keys(mepGroups).forEach(k=>{if(mepGroups[k])mepGroups[k].visible=!!mepOn[k];});
+  // 계통 뷰 켜지면 설비 본체는 흐리게 (계통 가독성↑)
+  Object.keys(floorGroups).forEach(k=>floorGroups[k].traverse(o=>{
+    if(o.material&&o.userData.baseOpacity!=null&&activeFloor==null){
+      o.material.opacity=any?Math.min(o.userData.baseOpacity,.18):o.userData.baseOpacity;}
+  }));
 }
 function setMetricVisibility(){
   flowSystems.forEach(s=>{const m=s.group.userData.metric;s.group.visible=!!metricOn[m];});
@@ -1148,26 +1235,49 @@ function makeRack(rk){
 }
 // 층 그룹(floorKey)에 랙 도열을 추가 — 계측용 rackMeshes에 등록
 let rackMeshes=[];
-function build3DRacksG(floorKey,racks,x0,baseY,z0,room){
+// 실측 치수 기반 서버홀 랙 배치 + 증설 여유공간 가시화
+// 표준 랙 600×1100mm → 트윈단위 환산(1u≈18mm 가정): rw=11(600), rd=20(1100)
+// 핫/콜드아일 컨테인먼트: 행 쌍이 마주보며 콜드아일(전면)·핫아일(후면) 교대
+function build3DRacksG(floorKey,racks,baseY,hall,room){
   const fg=floorGroups[floorKey];
-  // 두 줄로 마주보게(콜드 아일 사이) — 핫/콜드 아일 컨테인먼트
-  const rw=11,rh=34,rd=16,gap=4.5,aisleZ=30, perRow=5;
-  racks.forEach((rk,i)=>{
-    const col=i%perRow, row=Math.floor(i/perRow);
-    const rx=x0+col*(rw+gap), rz=z0+row*(rd+aisleZ);
-    const built=makeRack(rk);
-    built.group.position.set(rx,baseY+rh/2,rz);
-    if(row%2===1)built.group.rotation.y=Math.PI;
-    built.picker.userData.dyn=1;
-    fg.add(built.group);pickables.push(built.picker);
-    rackMeshes.push(built.group);   // 계측 대상
-  });
-  // 콜드 아일 통풍 바닥 타일
-  if(racks.length>perRow){
-    const aisle=plane((rw+gap)*perRow,aisleZ*0.6,0x0e2230,.4);
-    aisle.rotation.x=-Math.PI/2;
-    aisle.position.set(x0+((perRow-1)*(rw+gap))/2,0.6,z0+rd/2+aisleZ/2);
-    fg.add(aisle);}
+  const rw=11,rh=34,rd=20;            // 랙 실측(600×?×1100mm)
+  const gap=2;                        // 랙 측면 간격(나란히)
+  const coldAisle=22, hotAisle=14;    // 콜드아일(작업통로)·핫아일(배기)
+  // 서버홀 영역(hall:{x,z,w,d}) 안에 그리드 — 행=z방향(아일), 열=x방향(랙 나열)
+  const usableW=hall.w-16, usableD=hall.d-16;          // 벽 여백
+  const colN=Math.max(1,Math.floor(usableW/(rw+gap)));  // 한 행당 랙 수
+  const rowPitch=rd+coldAisle;                          // 행 간격(랙깊이+콜드아일)
+  const rowN=Math.max(1,Math.floor(usableD/rowPitch));  // 행 수
+  const capacity=colN*rowN;                             // 총 수용 가능 랙 수
+  const x0=hall.x-usableW/2+rw/2, z0=hall.z-usableD/2+rd/2;
+  let placed=0;
+  for(let row=0;row<rowN;row++){
+    for(let col=0;col<colN;col++){
+      const rx=x0+col*(rw+gap), rz=z0+row*rowPitch;
+      if(placed<racks.length){
+        const rk=racks[placed];const built=makeRack(rk);
+        built.group.position.set(rx,baseY+rh/2,rz);
+        if(row%2===1)built.group.rotation.y=Math.PI;   // 마주보기(핫/콜드)
+        built.picker.userData.dyn=1;
+        fg.add(built.group);pickables.push(built.picker);rackMeshes.push(built.group);
+        placed++;
+      } else {
+        // 증설 가능 빈자리 — 점선 외곽 박스 + 바닥 마커("+")
+        const ghost=edgeBox(rw,rh,rd,0x2ec4b6,.32);ghost.position.set(rx,baseY+rh/2,rz);
+        ghost.userData={dyn:1,info:{name:"증설 가능 슬롯",cat:"용량/CAPACITY",desc:`서버홀 ${floorKey} 여유 랙 위치. 전력·냉각 여유 내 증설 가능.`}};
+        fg.add(ghost);pickables.push(ghost);
+        const pad=plane(rw-1,rd-1,0x0e3a34,.25);pad.rotation.x=-Math.PI/2;pad.position.set(rx,baseY+0.7,rz);fg.add(pad);
+      }
+    }
+    // 콜드아일 바닥 타일(청색 통풍 그릴) — 행 사이
+    if(row<rowN-1){const aw=colN*(rw+gap);
+      const aisle=plane(aw,coldAisle*0.6,row%2===0?0x123a4a:0x2a1818,.45);  // 콜드(청)/핫(적갈)
+      aisle.rotation.x=-Math.PI/2;aisle.position.set(x0+(colN-1)*(rw+gap)/2,baseY+0.7,z0+row*rowPitch+rd/2+coldAisle/2);fg.add(aisle);}
+  }
+  // 서버홀 점유율 라벨 (실측 수용량 대비)
+  const occPct=Math.round(placed/capacity*100);
+  const lab2=lab(`${room} ${placed}/${capacity}랙 (${occPct}%)`,occPct>=85?"#E24B4A":occPct>=60?"#EFC94B":"#5DCAA5");
+  lab2.position.set(hall.x,baseY+rh+10,hall.z-hall.d/2+6);lab2.scale.set(44,11,1);lab2.userData={dyn:1};fg.add(lab2);
 }
 function onPick(e){const rect=renderer.domElement.getBoundingClientRect();
   mouse.x=((e.clientX-rect.left)/rect.width)*2-1;mouse.y=-((e.clientY-rect.top)/rect.height)*2+1;
