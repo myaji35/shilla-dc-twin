@@ -876,6 +876,19 @@ function makeSolar(){const g=new TJS.Group();
   g.rotation.x=-0.35;
   const leg=box(2,8,2,0x2a3a4a,0x0);leg.position.set(0,-5,6);g.add(leg);
   return g;}
+// 인버터 실외기(VRF): 캐비닛 + 전면 팬그릴(원형) + 측면 방열핀 + 인버터 표시등
+function makeInverterUnit(){const g=new TJS.Group();
+  const cab=box(14,16,9,0x2a3a44,0x0a2024);cab.material.metalness=.7;g.add(cab);g.add(edgeBox(14,16,9,0x4ad0c0,.5));
+  // 전면 팬 그릴(원형) — 인버터 가변속
+  const ring=new TJS.Mesh(new TJS.TorusGeometry(4.5,.5,8,20),new TJS.MeshStandardMaterial({color:0x9FE1CB,emissive:0x2a6a5a,emissiveIntensity:.4}));ring.position.set(0,2,4.6);g.add(ring);
+  const fan=new TJS.Group();fan.position.set(0,2,4.4);
+  for(let b=0;b<5;b++){const bl=box(4,.3,1.2,0xbfe8df,0x2a6a5a);bl.position.x=2;const h=new TJS.Group();h.add(bl);h.rotation.z=b*Math.PI*2/5;fan.add(h);}
+  fan.userData={spin:1};g.add(fan);g.userData={fan};
+  // 측면 방열핀
+  for(let k=0;k<5;k++){const fin=box(.4,14,7,0x1a2a34,0x0);fin.position.set(-7,0,-3+k*1.4);g.add(fin);}
+  // 인버터 표시등(녹색=정상 가변운전)
+  const led=new TJS.Mesh(new TJS.PlaneGeometry(2,1),emissive(0x39d98a));led.position.set(-4,-6,4.6);g.add(led);
+  return g;}
 
 /* ===== 바닥 평면도 + 존 구획 (3D를 도면 위에 앉히기) ===== */
 function floorPlate(FW,FD){const g=new TJS.Group();
@@ -1001,7 +1014,7 @@ function build3D(){if(!scene)return;clearScene();fanSpinners=[];flowSystems=[];f
   place("1F",deskChair(),135,2,140);place("1F",deskChair(),165,2,140);
   addTo("1F",tagAt("LOBBY",150,22,150));
   // 공조 CRAC 3대
-  for(let i=0;i<3;i++)place("1F",makeCRAC(),180,17,40+i*38,{name:"CRAC-A "+(i+1),cat:"냉각/COOL",desc:"항온항습 N+1. 상향 송풍 + 냉매 2계통."});
+  for(let i=0;i<3;i++)place("1F",makeCRAC(),180,17,40+i*38,{name:"인버터 CRAC-A "+(i+1),cat:"냉각/COOL",desc:"인버터 항온항습 N+1. 가변속 EC팬 + 가변냉매. 부분부하 효율 大, 정속 대비 절전."});
   addTo("1F",tagAt("CRAC-A",180,40,80));
 
   // ════ 2F: 서버실 B(주력, 면적 가중 大) + 사무/데모/화장실(우측 좁은 띠) ════
@@ -1018,12 +1031,17 @@ function build3D(){if(!scene)return;clearScene();fanSpinners=[];flowSystems=[];f
   place("2F",restroom(),185,2,28,{name:"화장실",cat:"건축/CORE",desc:"남녀 분리 위생설비."});
 
   // ════ 옥상: 냉각타워 + 태양광 ════
-  addTo("roof",zone(84,45,150,60,0x2ec4b6,"COOLING TOWER"));
-  addTo("roof",zone(130,150,150,60,0x2a7fd4,"SOLAR PV ARRAY"));
-  for(let i=0;i<3;i++){const ct=makeCoolTower();place("roof",ct,40+i*44,9,45,{name:"냉각타워 RTU "+(i+1),cat:"냉각/COOL",desc:"개방형 냉각탑. 회전팬 + 4면 루버. COP 3.84."});if(ct.userData.fan)fanSpinners.push(ct.userData.fan);}
-  addTo("roof",tagAt("냉각타워",84,30,45));
-  for(let i=0;i<4;i++)place("roof",makeSolar(),60+i*48,8,150,{name:"태양광 PV "+(i+1),cat:"전력/POWER",desc:"재생에너지. 경사 어레이 + 셀 그리드."});
-  addTo("roof",tagAt("태양광 PV",130,18,150));
+  // 냉각존(좌측 띠) — 인버터 냉각타워 + VRF 인버터 실외기
+  addTo("roof",zone(45,90,70,160,0x2ec4b6,"INVERTER COOLING"));
+  // 태양광존(우측 대부분) — 현실적 대면적
+  addTo("roof",zone(150,90,130,160,0x2a7fd4,"SOLAR PV ARRAY"));
+  for(let i=0;i<2;i++){const ct=makeCoolTower();place("roof",ct,30+i*40,9,50,{name:"인버터 냉각타워 "+(i+1),cat:"냉각/COOL",desc:"인버터 가변속 팬·펌프. 부하 추종 RPM 제어 → 부분부하 효율 大, COP 4.5↑."});if(ct.userData.fan)fanSpinners.push(ct.userData.fan);}
+  for(let i=0;i<4;i++){const iu=makeInverterUnit();place("roof",iu,20+i*18,8,128,{name:"인버터 실외기 VRF "+(i+1),cat:"냉각/COOL",desc:"가변냉매유량(VRF) 인버터 컴프레서. 정속 대비 30~40% 절전."});if(iu.userData.fan)fanSpinners.push(iu.userData.fan);}
+  addTo("roof",tagAt("인버터 냉각",45,32,50));
+  // 대규모 태양광 어레이 — 6열×3행 = 18 패널(옥상 가용면적 최대 활용)
+  for(let row=0;row<3;row++)for(let col=0;col<6;col++)
+    place("roof",makeSolar(),95+col*22,8,38+row*52,{name:`태양광 PV ${row*6+col+1}`,cat:"전력/POWER",desc:"재생에너지 어레이. 인버터 PCS 계통연계. 옥상 가용면적 최대 활용."});
+  addTo("roof",tagAt("태양광 PV 어레이",150,22,40));
 
   // ── 전층 관통: 비상계단 코어 + 수직 냉각 파이프(scene 직속, 그룹 무관) ──
   const core=box(16,FH*3,20,0x3a4a3a,0x0a120a);core.material.opacity=.35;core.material.transparent=true;
