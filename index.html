@@ -1062,12 +1062,42 @@ function buildFlows(FH){
   // 전력 흐름(노랑): B1 변압기(150,-FH+14,40) → UPS(55,-FH+16,40) → 수직상승 → 1F 서버랙(70,17,80)
   const powerPath=[[150,-FH+18,40],[55,-FH+20,40],[55,-6,40],[55,12,70],[70,18,80]];
   const pflow=makeFlow(powerPath,0xEFC94B,7,0.0045,1.3);pflow.userData={dyn:1,metric:"power"};scene.add(pflow);
-  // 냉각수 순환(청록): 축열조(40,-FH+17,140) → 펌프 → 1F CRAC(180,17,60) → 수직 → 옥상 냉각타워(40,FH*2+9,45)
-  const coolPath=[[40,-FH+17,140],[100,-FH+17,120],[180,12,70],[180,40,60],[120,FH+30,90],[72,FH*2+9,60],[40,FH*2+9,45]];
-  const cflow=makeFlow(coolPath,0x2ec4b6,9,0.0035,1.4);cflow.userData={dyn:1,metric:"cool"};scene.add(cflow);
+  // ── 냉각수 실배관 계통: 공급(IN, 7℃ 청색) / 환수(OUT, 14℃ 적색) 분리 + 각 층 연결 ──
+  buildCoolingLoop(FH);
   // 열 흐름(냉기, 청색): CRAC(180,17,80) → 서버랙 콜드아일(60,17,80)
   const heatPath=[[180,14,80],[140,16,80],[100,17,80],[60,18,80]];
   const hflow=makeFlow(heatPath,0x5ad6ff,8,0.006,1.0);hflow.userData={dyn:1,metric:"heat"};scene.add(hflow);
+}
+
+let coolPipeGroup=null;
+/* 냉각수 실배관 계통 — 공급(IN, 7℃ 청)·환수(OUT, 14℃ 적) 분리 배관 + 각 층 연결 + 흐름 dot */
+function buildCoolingLoop(FH){
+  // 배관 자체는 항상 표시(실설비 라인), dot 흐름은 냉각수 토글 시
+  const g=new TJS.Group();g.userData={dyn:1};scene.add(g);coolPipeGroup=g;
+  const IN=0x1ec8ff, OUT=0xe2564a;       // 공급(청)·환수(적)
+  // 주요 노드(월드 좌표): 옥상 냉각타워(40,FH*2+9,45) / B1 축열조·펌프(40,-FH+17,140) / 각 층 CRAC 헤더
+  const tower=[40,FH*2+9,45], tank=[40,-FH+17,140];
+  const cracHeader={B1:[150,-FH+20,120],"1F":[180,18,80],"2F":[180,FH+18,55]};  // 층별 냉방 분기 헤더
+  // ── 공급(IN) 라이저: 냉각타워 → (수직 하강) → 축열조 → 각 층 CRAC 헤더 (차가운 물 분배) ──
+  const inMain=[tower,[40,FH+30,45],[40,18,45],[40,-FH+17,90],tank];           // 타워→축열조(공급 라이저)
+  runBus(g,IN,1.4,inMain);
+  // 축열조 → 각 층 공급 분기 (수직 라이저 x=55)
+  const inRiser=[tank,[55,-FH+17,120],[55,-FH+18,90],[55,18,90],[55,FH+18,90]];
+  runBus(g,IN,1.2,inRiser);
+  Object.entries(cracHeader).forEach(([fl,h])=>{const y=h[1];runBus(g,IN,1.0,[[55,y,90],[h[0]-10,y,h[2]],h]);});
+  // ── 환수(OUT) 라이저: 각 층 CRAC → 환수 라이저(x=88) → 축열조 → 냉각타워 (더운 물 회수) ──
+  const outRiser=[[88,FH+18,90],[88,18,90],[88,-FH+18,90],[88,-FH+17,140]];
+  runBus(g,OUT,1.2,outRiser);
+  Object.entries(cracHeader).forEach(([fl,h])=>{const y=h[1];runBus(g,OUT,1.0,[[h[0]+8,y,h[2]],[88,y,90]]);});
+  runBus(g,OUT,1.4,[[88,-FH+17,140],[72,-FH+17,100],[72,18,45],[72,FH+30,45],[58,FH*2+9,60],tower]); // 축열조→타워 환수
+  // IN/OUT 라벨
+  const li=lab("냉수 공급 IN 7℃","#9fe6ff");li.position.set(40,FH+40,45);li.scale.set(40,10,1);li.userData={dyn:1};g.add(li);
+  const lo=lab("냉수 환수 OUT 14℃","#ffb0a8");lo.position.set(95,FH+40,90);lo.scale.set(42,10,1);lo.userData={dyn:1};g.add(lo);
+  // 흐름 dot — 공급(IN, 정방향)·환수(OUT, 정방향) 각각
+  const inFull=inMain.concat(inRiser.slice(1));
+  const f1=makeFlow(inFull,IN,10,0.0040,1.5);f1.userData={dyn:1,metric:"cool"};scene.add(f1);
+  const outFull=[[88,FH+18,90]].concat(outRiser.slice(1)).concat([[72,-FH+17,100],[72,18,45],[72,FH+30,45],[58,FH*2+9,60],tower]);
+  const f2=makeFlow(outFull,OUT,10,0.0040,1.5);f2.userData={dyn:1,metric:"cool"};scene.add(f2);
 }
 
 /* ===== MEP 계통 배치도 (전기/네트워크/공조덕트/냉수배관) ===== */
